@@ -1,0 +1,9 @@
+# .gitignore
+/target
+.env
+**/*.rs.bk
+
+# Migration
+migration/target
+
+.vs

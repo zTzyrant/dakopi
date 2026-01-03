@@ -1,0 +1,20 @@
+meta {
+  name: Health
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/api/health
+  body: none
+  auth: inherit
+}
+
+vars:pre-request {
+  base_url: 0.0.0.0:3000
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

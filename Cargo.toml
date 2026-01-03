@@ -1,0 +1,30 @@
+[package]
+name = "dakopi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web Server
+axum = "0.8.8"
+tokio = { version = "1", features = ["full"] }
+
+# Utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# --- Database Core (INI YANG TADI HILANG) ---
+# Ini wajib ada untuk aplikasi, beda dengan migration!
+sea-orm = { version = "1.1", features = [ "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite", "runtime-tokio-rustls", "macros" ] }
+
+# --- Security ---
+argon2 = "0.5"
+rand_core = "0.6"
+jsonwebtoken = "9"
+uuid = { version = "1", features = ["v7", "serde", "v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+validator = { version = "0.20.0", features = ["derive"] }
