@@ -13,6 +13,9 @@ pub struct Config {
     pub smtp_from: String,
     pub brevo_api_key: String,
     pub reset_hash_key: String,
+    pub imagekit_private_key: String,
+    pub imagekit_public_key: String,
+    pub imagekit_url_endpoint: String,
 }
 
 #[derive(Clone, axum::extract::FromRef)]
@@ -20,6 +23,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub redis_service: RedisService,
     pub email_service: crate::services::email_service::EmailService,
+    pub imagekit_service: crate::services::imagekit_service::ImageKitService,
     pub enforcer: crate::auth::SharedEnforcer,
 }
 
@@ -44,6 +48,10 @@ impl Config {
         let brevo_api_key = env::var("BREVO_API_KEY").unwrap_or_default();
         let reset_hash_key = env::var("RESET_HASH_KEY").unwrap_or_else(|_| "default_secret".to_string());
 
+        let imagekit_private_key = env::var("IMAGEKIT_PRIVATE_KEY").expect("IMAGEKIT_PRIVATE_KEY must be set");
+        let imagekit_public_key = env::var("IMAGEKIT_PUBLIC_KEY").expect("IMAGEKIT_PUBLIC_KEY must be set");
+        let imagekit_url_endpoint = env::var("IMAGEKIT_URL_ENDPOINT").expect("IMAGEKIT_URL_ENDPOINT must be set");
+
         Config {
             server_host,
             server_port,
@@ -54,6 +62,9 @@ impl Config {
             smtp_from,
             brevo_api_key,
             reset_hash_key,
+            imagekit_private_key,
+            imagekit_public_key,
+            imagekit_url_endpoint,
         }
     }
 }

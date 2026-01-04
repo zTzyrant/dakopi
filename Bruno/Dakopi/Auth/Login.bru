@@ -12,8 +12,14 @@ post {
 
 body:json {
   {
-    "login_id": "admin",
-    "password": "rahasia"
+    "login_id": "superadmin",
+    "password": "superpassword123"
+  }
+}
+
+script:post-response {
+  if(res.body.data.token){
+    bru.setVar("token", res.body.data.token)
   }
 }
 

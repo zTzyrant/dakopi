@@ -8,7 +8,7 @@ members = ["migration"]
 
 [dependencies]
 # Web Server
-axum = { version = "0.8.8", features = ["macros"] }
+axum = { version = "0.8.8", features = ["macros", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 
 # Utilities
@@ -34,7 +34,7 @@ uuid = { version = "1", features = ["v7", "serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 # HTTP Client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
 
 # Redis
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp"] }
