@@ -1,7 +1,9 @@
 [build]
-builder = "nixpacks" # Railway otomatis pakai ini untuk Rust
-buildCommand = "cargo build --release"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "./target/release/dakopi"
+startCommand = "./migration up && ./dakopi"
 restartPolicyType = "ON_FAILURE"
+health_check_path = "/api/health"
+health_check_timeout = 300
