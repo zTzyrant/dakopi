@@ -19,40 +19,48 @@ use crate::services::redis_service::RedisService;
 async fn main() {
     dotenv().ok();
     
-    // Set Timezone ke UTC+8 (WITA)
+    // Set system timezone to UTC+8 (WITA)
     std::env::set_var("TZ", "Asia/Makassar");
     
     tracing_subscriber::fmt::init();
 
     let cfg = Config::init();
-    println!("🚀 Memulai Dakopi Backend...");
+    println!("🚀 Starting Dakopi Backend...");
 
-    // 1. Konek Database
+    // 1. Database Connection
+    println!("📡 Connecting to Database...");
     let db = Database::connect(&cfg.database_url)
         .await
-        .expect("🔥 Gagal konek Database!");
+        .expect("🔥 Failed to connect to Database!");
     println!("✅ Database Connected!");
 
-    // Setup Redis
+    // 2. Casbin Initialization
+    println!("🔐 Initializing Casbin...");
+    let enforcer = crate::auth::setup_casbin(db.clone()).await;
+
+    // 3. Database Seeding
+    println!("🌱 Running Seeders...");
+    if let Err(e) = seeders::run_seeders(&db, &enforcer).await {
+        tracing::error!("❌ Seeding failed: {}", e);
+    } else {
+        println!("✅ Seeding Successful!");
+    }
+
+    // 4. Redis Connection
+    println!("🔌 Connecting to Redis...");
     let redis_service = RedisService::new(&cfg);
     if let Err(e) = redis_service.check_connection().await {
-        tracing::warn!("⚠️  Redis connection failed: {}", e);
+        tracing::error!("⚠️  Redis connection failed: {}", e);
+        // On cloud environments, failing to connect to Redis should be critical
+        panic!("Redis connection failed: {}", e);
     } else {
         println!("✅ Redis Connected!");
     }
 
-    // Setup Email Service
+    // 5. Setup Services
     let email_service = crate::services::email_service::EmailService::new(&cfg, redis_service.clone());
 
-    // Setup Casbin
-    let enforcer = crate::auth::setup_casbin(db.clone()).await;
-
-    // Jalankan Seeder
-    if let Err(e) = seeders::run_seeders(&db, &enforcer).await {
-        tracing::error!("❌ Seeding failed: {}", e);
-    }
-
-    // Gabungkan ke AppState
+    // 6. Build App State
     let state = AppState {
         db,
         redis_service,
@@ -60,14 +68,15 @@ async fn main() {
         enforcer,
     };
 
-    // 2. Setup Router
+    // 7. Initialize Router
     let app = routes::create_routes().with_state(state);
 
-    // 3. Run Server
+    // 8. Start Server
     let addr_str = format!("{}:{}", cfg.server_host, cfg.server_port);
     let addr: SocketAddr = addr_str.parse().expect("Invalid address");
 
-    println!("listening on {}", addr);
+    println!("🎯 Server ready! Listening on http://{}", addr);
+    
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }

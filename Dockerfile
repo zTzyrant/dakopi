@@ -38,7 +38,6 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy binaries
-# Railway/Cargo builds workspace binaries in target/release/
 COPY --from=builder /app/target/release/dakopi ./dakopi
 COPY --from=builder /app/target/release/migration ./migration
 
@@ -48,6 +47,5 @@ COPY src/auth/rbac_model.conf ./src/auth/rbac_model.conf
 
 EXPOSE 3000
 
-# Run migration up, then start app
-# Menggunakan flag 'up' eksplisit untuk sea-orm-cli
-CMD ["sh", "-c", "./migration up && ./dakopi"]
+# Default command (akan ditimpa oleh railway.toml jika ada)
+CMD ["./dakopi"]

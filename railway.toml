@@ -3,7 +3,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "./migration up && ./dakopi"
+preDeployCommand = "./migration up"
+startCommand = "./dakopi"
 restartPolicyType = "ON_FAILURE"
 health_check_path = "/api/health"
-health_check_timeout = 300
+health_check_timeout = 600
+health_check_interval = 30
