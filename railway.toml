@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks" # Railway otomatis pakai ini untuk Rust
+buildCommand = "cargo build --release"
+
+[deploy]
+startCommand = "./target/release/dakopi"
+restartPolicyType = "ON_FAILURE"

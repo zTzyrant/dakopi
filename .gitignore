@@ -1,6 +1,7 @@
 # .gitignore
 /target
 .env
+.env.prod
 **/*.rs.bk
 
 # Migration
