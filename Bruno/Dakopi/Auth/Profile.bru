@@ -1,0 +1,16 @@
+meta {
+  name: Profile
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{base_url}}/api/auth/profile
+  body: none
+  auth: inherit
+}
+
+docs {
+  Endpoint ini membutuhkan header `Authorization: Bearer <token>`.
+  Menampilkan informasi username, email, dan daftar role.
+}

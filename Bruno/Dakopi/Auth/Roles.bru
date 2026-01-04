@@ -1,17 +1,13 @@
 meta {
-  name: Health
+  name: Roles
   type: http
-  seq: 1
+  seq: 4
 }
 
 get {
-  url: {{base_url}}/api/health
+  url: {{base_url}}/api/auth/roles
   body: none
   auth: inherit
-}
-
-vars:pre-request {
-  base_url: 0.0.0.0:3000
 }
 
 settings {

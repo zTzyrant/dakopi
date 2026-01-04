@@ -6,11 +6,11 @@ use crate::entities::{user, user::Entity as User};
 pub struct UserRepository;
 
 impl UserRepository {
-    // Find user by email or username (Active only)
-    pub async fn find_active_by_login_id(
-        db: &DatabaseConnection, 
+    pub async fn find_active_by_login_id<C>(
+        db: &C, 
         login_id: &str
-    ) -> Result<Option<user::Model>, DbErr> {
+    ) -> Result<Option<user::Model>, DbErr> 
+    where C: ConnectionTrait {
         User::find()
             .filter(
                 Condition::any()
@@ -22,12 +22,12 @@ impl UserRepository {
             .await
     }
 
-    // Check if user exists (for registration) - Returns LIST to identify what matches
-    pub async fn find_active_duplicates(
-        db: &DatabaseConnection,
+    pub async fn find_active_duplicates<C>(
+        db: &C,
         username: &str,
         email: &str
-    ) -> Result<Vec<user::Model>, DbErr> {
+    ) -> Result<Vec<user::Model>, DbErr> 
+    where C: ConnectionTrait {
          User::find()
         .filter(
             Condition::any()
@@ -39,13 +39,13 @@ impl UserRepository {
         .await
     }
 
-    // Create new user
-    pub async fn create(
-        db: &DatabaseConnection,
+    pub async fn create<C>(
+        db: &C,
         username: String,
         email: String,
         password_hash: String
-    ) -> Result<user::Model, DbErr> {
+    ) -> Result<user::Model, DbErr> 
+    where C: ConnectionTrait {
         let new_user = user::ActiveModel {
             id: NotSet,
             public_id: Set(Uuid::now_v7()),
@@ -61,5 +61,22 @@ impl UserRepository {
         };
 
         new_user.insert(db).await
+    }
+
+    pub async fn find_by_public_id_with_roles<C>(
+        db: &C,
+        public_id: Uuid
+    ) -> Result<Option<(user::Model, Vec<crate::entities::role::Model>)>, DbErr>
+    where C: ConnectionTrait {
+        use crate::entities::{role};
+
+        let user_with_roles = User::find()
+            .filter(user::Column::PublicId.eq(public_id))
+            .filter(user::Column::DeletedAt.is_null())
+            .find_with_related(role::Entity)
+            .all(db)
+            .await?;
+
+        Ok(user_with_roles.into_iter().next())
     }
 }

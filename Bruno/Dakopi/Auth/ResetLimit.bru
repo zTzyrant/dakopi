@@ -1,0 +1,22 @@
+meta {
+  name: Reset Email Limit
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/api/auth/reset-limit
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "secret": "rahasia_reset_limit_123"
+  }
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}

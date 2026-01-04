@@ -1,0 +1,11 @@
+meta {
+  name: List Policies
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/api/admin/casbin/policies
+  body: none
+  auth: inherit
+}

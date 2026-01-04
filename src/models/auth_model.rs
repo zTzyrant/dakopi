@@ -43,3 +43,32 @@ pub struct LoginResponse {
     pub token: String,
     pub type_: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: Uuid,      
+    pub username: String,
+    pub exp: usize,     
+    pub iat: usize,     
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ResetEmailLimitRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub secret: String,
+}
+
+#[derive(Serialize)]
+pub struct RoleInfo {
+    pub id: Uuid, // Public UUID
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct ProfileResponse {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub roles: Vec<RoleInfo>,
+}

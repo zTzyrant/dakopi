@@ -1,10 +1,13 @@
-use axum::{routing::post, Router};
-use sea_orm::DatabaseConnection;
-use crate::handlers::auth_handler::{register_user_handler, login_user_handler};
+use axum::{routing::{post, get}, Router};
+use crate::config::AppState;
+use crate::handlers::auth_handler::*;
 
-// Kita kembalikan Router yang State-nya adalah DatabaseConnection
-pub fn auth_routes() -> Router<DatabaseConnection> {
+// Return Router<AppState> because handlers now use AppState
+pub fn auth_routes() -> Router<AppState> {
     Router::new()
         .route("/register", post(register_user_handler))
         .route("/login", post(login_user_handler))
+        .route("/reset-limit", post(reset_email_limit_handler))
+        .route("/roles", get(get_roles_handler))
+        .route("/profile", get(profile_handler))
 }
