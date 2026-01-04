@@ -3,36 +3,33 @@ FROM rust:latest AS builder
 
 WORKDIR /app
 
-# 1. Install build dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y cmake pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
-# 2. Copy file manifest utama & migration
+# Copy manifests
 COPY Cargo.toml Cargo.lock ./
 COPY migration/Cargo.toml ./migration/Cargo.toml
 
-# 3. Dummy build untuk cache dependencies (Wajib untuk workspace)
+# Dummy build for caching dependencies
 RUN mkdir -p src migration/src \
     && echo "fn main() {}" > src/main.rs \
     && echo "fn main() {}" > migration/src/main.rs \
     && touch migration/src/lib.rs
 
-# Build semua dependencies di workspace
 RUN cargo build --release --workspace
 
-# 4. Hapus dummy dan copy source code asli
+# Copy real source code
 RUN rm -rf src migration/src
 COPY src ./src
 COPY migration/src ./migration/src
 
-# 5. Build Aplikasi Final & Migration Binary
-# Menggunakan --workspace agar paket migration juga ikut di-compile
+# Final build
 RUN touch src/main.rs migration/src/main.rs
 RUN cargo build --release --workspace
 
 # --- Stage 2: Runner ---
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
@@ -40,16 +37,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy binary dari target release
-# Catatan: binary migration berada di folder target/release/migration
-COPY --from=builder /app/target/release/dakopi /app/dakopi
-COPY --from=builder /app/target/release/migration /app/migration
+# Copy binaries
+# Railway/Cargo builds workspace binaries in target/release/
+COPY --from=builder /app/target/release/dakopi ./dakopi
+COPY --from=builder /app/target/release/migration ./migration
 
-# Copy konfigurasi Casbin
+# Copy config
 RUN mkdir -p src/auth
-COPY src/auth/rbac_model.conf /app/src/auth/rbac_model.conf
+COPY src/auth/rbac_model.conf ./src/auth/rbac_model.conf
 
 EXPOSE 3000
 
-# Jalankan migrasi lalu jalankan aplikasi menggunakan shell form untuk multiple commands
-CMD ["sh", "-c", "./migration && ./dakopi"]
+# Run migration up, then start app
+# Menggunakan flag 'up' eksplisit untuk sea-orm-cli
+CMD ["sh", "-c", "./migration up && ./dakopi"]
