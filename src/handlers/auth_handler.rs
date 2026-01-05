@@ -2,6 +2,8 @@ use axum::{
     extract::State,
     response::IntoResponse,
 };
+use serde::{Deserialize, Serialize};
+use validator::Validate;
 use crate::config::AppState;
 use crate::models::auth_model::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, ResetEmailLimitRequest, ProfileResponse};
 use crate::services::auth_service::AuthService;
@@ -54,10 +56,10 @@ pub async fn login_user_handler(
         payload.login_id,
         payload.password
     ).await {
-        Ok((token, type_)) => ResponseBuilder::success(
+        Ok((token, refresh_token, type_)) => ResponseBuilder::success(
             "AUTH_LOGIN_SUCCESS",
             "Login successful",
-            LoginResponse { token, type_ }
+            LoginResponse { token, refresh_token, type_ }
         ),
         Err((status, code, message)) => ResponseBuilder::error::<LoginResponse>(status, code, &message),
     }
@@ -129,5 +131,58 @@ pub async fn profile_handler(
             "USER_NOT_FOUND",
             "No user found in database"
         )
+    }
+}
+
+// 6. HANDLER REFRESH TOKEN
+use crate::utils::jwt_utils::JwtUtils;
+
+#[derive(Deserialize, Validate)]
+pub struct RefreshTokenRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub refresh_token: String,
+}
+
+#[derive(Serialize)]
+pub struct RefreshTokenResponse {
+    pub token: String,
+    pub refresh_token: Option<String>,
+    pub type_: String,
+}
+
+pub async fn refresh_token_handler(
+    State(_state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<RefreshTokenRequest>,
+) -> impl IntoResponse {
+    // Validate the refresh token
+    match JwtUtils::validate_refresh_token(&payload.refresh_token) {
+        Ok(claims) => {
+            // Generate new access token and refresh token
+            let new_token = JwtUtils::generate_jwt(claims.sub, &claims.username);
+            let new_refresh_token = JwtUtils::generate_refresh_token(claims.sub, &claims.username);
+
+            match (new_token, new_refresh_token) {
+                (Ok(token), Ok(refresh_token)) => ResponseBuilder::success(
+                    "TOKEN_REFRESHED",
+                    "Token refreshed successfully",
+                    RefreshTokenResponse {
+                        token,
+                        refresh_token: Some(refresh_token),
+                        type_: "Bearer".to_string(),
+                    }
+                ),
+                _ => ResponseBuilder::error::<RefreshTokenResponse>(
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "JWT_ERR",
+                    "Token generation failed"
+                ),
+            }
+        },
+        Err(_) => ResponseBuilder::error::<RefreshTokenResponse>(
+            axum::http::StatusCode::UNAUTHORIZED,
+            "INVALID_REFRESH_TOKEN",
+            "Invalid or expired refresh token"
+        ),
     }
 }

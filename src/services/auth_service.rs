@@ -8,14 +8,13 @@ use argon2::{
 use casbin::{MgmtApi};
 use axum::http::StatusCode;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, ActiveValue::Set, TransactionTrait, ActiveModelTrait};
-use jsonwebtoken::{encode, Header, EncodingKey};
-use chrono::{Utc, Duration};
 use uuid::Uuid;
 
 use crate::repositories::user_repository::UserRepository;
-use crate::config::{Config, AppState};
+use crate::config::AppState;
 use crate::entities::{user, role, user_role};
-use crate::models::auth_model::{Claims, ProfileResponse, RoleInfo};
+use crate::models::auth_model::{ProfileResponse, RoleInfo};
+use crate::utils::jwt_utils::JwtUtils;
 
 pub struct AuthService;
 
@@ -105,7 +104,7 @@ impl AuthService {
         db: &DatabaseConnection,
         login_id: String,
         password: String
-    ) -> Result<(String, String), (StatusCode, &'static str, String)> {
+    ) -> Result<(String, Option<String>, String), (StatusCode, &'static str, String)> {
         let user = UserRepository::find_active_by_login_id(db, &login_id)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
@@ -121,7 +120,10 @@ impl AuthService {
         let token = Self::generate_jwt(user.public_id, &user.username)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
-        Ok((token, "Bearer".to_string()))
+        let refresh_token = JwtUtils::generate_refresh_token(user.public_id, &user.username)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Refresh token generation failed".to_string()))?;
+
+        Ok((token, Some(refresh_token), "Bearer".to_string()))
     }
 
     // --- UTILS ---
@@ -151,13 +153,6 @@ impl AuthService {
     }
 
     fn generate_jwt(user_id: Uuid, username: &str) -> Result<String, jsonwebtoken::errors::Error> {
-        let cfg = Config::init();
-        let now = Utc::now();
-        let expire = now + Duration::minutes(cfg.jwt_expires_in);
-        let claims = Claims {
-            sub: user_id, username: username.to_string(),
-            exp: expire.timestamp() as usize, iat: now.timestamp() as usize,
-        };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
+        JwtUtils::generate_jwt(user_id, username)
     }
 }
