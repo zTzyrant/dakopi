@@ -34,7 +34,7 @@ uuid = { version = "1", features = ["v7", "serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 email_address = "0.2"
 oauth2 = "4"
-totp-rs = "5"
+totp-rs = { version = "5", features = ["qr"] }
 qrcode = "0.14"
 
 # HTTP

@@ -8,28 +8,38 @@ use uuid::Uuid;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RefreshTokenClaims {
     pub sub: Uuid,
-    pub username: String,
     pub exp: usize,
     pub iat: usize,
     pub jti: String,
-    pub token_type: String, // To distinguish from access tokens
+    pub token_type: String, 
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TwoFaTempClaims {
+    pub sub: Uuid,
+    pub exp: usize,
+    pub iat: usize,
+    pub token_type: String, 
 }
 
 pub struct JwtUtils;
 
 impl JwtUtils {
-    /// Generate a JWT token with the provided user ID and username
-    pub fn generate_jwt(user_id: Uuid, username: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    /// Generate Access Token (with JTI for blacklist capability)
+    pub fn generate_jwt(user_id: Uuid) -> Result<(String, usize, String), jsonwebtoken::errors::Error> {
         let cfg = Config::init();
         let now = Utc::now();
-        let expire = now + Duration::minutes(cfg.jwt_expires_in);
+        let expire = now + Duration::minutes(cfg.jwt_access_minutes);
+        let jti = Uuid::now_v7().to_string();
+        
         let claims = Claims {
             sub: user_id,
-            username: username.to_string(),
             exp: expire.timestamp() as usize,
             iat: now.timestamp() as usize,
+            jti: jti.clone(),
         };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
+        let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))?;
+        Ok((token, expire.timestamp() as usize, jti))
     }
 
     /// Validate a JWT token and return the token data
@@ -42,80 +52,54 @@ impl JwtUtils {
         jsonwebtoken::decode::<Claims>(token, &decoding_key, &validation)
     }
 
-    /// Validate a JWT token and return only the claims
-    #[allow(dead_code)]
-    pub fn validate_jwt_claims(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
-        let token_data = Self::validate_jwt(token)?;
+    /// Generate 2FA Temp Token (5 mins)
+    pub fn generate_2fa_temp_token(user_id: Uuid) -> Result<String, jsonwebtoken::errors::Error> {
+        let cfg = Config::init();
+        let now = Utc::now();
+        let expire = now + Duration::minutes(5); 
+        let claims = TwoFaTempClaims {
+            sub: user_id,
+            exp: expire.timestamp() as usize,
+            iat: now.timestamp() as usize,
+            token_type: "2fa_temp".to_string(),
+        };
+        encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
+    }
+
+    /// Validate 2FA Temp Token
+    pub fn validate_2fa_temp_token(token: &str) -> Result<TwoFaTempClaims, jsonwebtoken::errors::Error> {
+        let cfg = Config::init();
+        let decoding_key = DecodingKey::from_secret(cfg.jwt_secret.as_bytes());
+        let mut validation = Validation::default();
+        validation.validate_exp = true;
+
+        let token_data = decode::<TwoFaTempClaims>(token, &decoding_key, &validation)?;
+        if token_data.claims.token_type != "2fa_temp" {
+            return Err(jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken));
+        }
         Ok(token_data.claims)
     }
 
-    /// Generate a JWT token with custom expiration time (in minutes)
-    #[allow(dead_code)]
-    pub fn generate_jwt_with_custom_exp(
-        user_id: Uuid,
-        username: &str,
-        minutes: i64
-    ) -> Result<String, jsonwebtoken::errors::Error> {
+    /// Generate Refresh Token
+    /// Returns (token, jti, expires_at_timestamp)
+    pub fn generate_refresh_token(user_id: Uuid, days: i64) -> Result<(String, String, usize), jsonwebtoken::errors::Error> {
         let cfg = Config::init();
         let now = Utc::now();
-        let expire = now + Duration::minutes(minutes);
-        let claims = Claims {
-            sub: user_id,
-            username: username.to_string(),
-            exp: expire.timestamp() as usize,
-            iat: now.timestamp() as usize,
-        };
-        encode(&jsonwebtoken::Header::default(), &claims, &jsonwebtoken::EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
-    }
-
-    /// Generate a JWT token with custom claims
-    #[allow(dead_code)]
-    pub fn generate_jwt_with_custom_claims(
-        user_id: Uuid,
-        username: &str,
-        _custom_claims: Option<std::collections::HashMap<String, String>>
-    ) -> Result<String, jsonwebtoken::errors::Error> {
-        let cfg = Config::init();
-        let now = Utc::now();
-        let expire = now + Duration::minutes(cfg.jwt_expires_in);
-
-        // For custom claims, we'll extend the Claims struct with additional fields if needed
-        // For now, we'll use the standard Claims and add custom data to username field if needed
-        let claims = Claims {
-            sub: user_id,
-            username: username.to_string(),
-            exp: expire.timestamp() as usize,
-            iat: now.timestamp() as usize,
-        };
-
-        // If you need to add custom claims, you might need to create a separate struct
-        // For now, we'll just return the standard token
-        encode(&jsonwebtoken::Header::default(), &claims, &jsonwebtoken::EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
-    }
-
-    /// Generate a refresh JWT token with the provided user ID and username
-    /// Returns (token, jti)
-    pub fn generate_refresh_token(user_id: Uuid, username: &str) -> Result<(String, String), jsonwebtoken::errors::Error> {
-        let cfg = Config::init();
-        // Refresh token expires in 7 days by default
-        let refresh_token_expires_in = cfg.jwt_expires_in * 24 * 7; // 7 days in minutes
-        let now = Utc::now();
-        let expire = now + Duration::minutes(refresh_token_expires_in);
+        let expire = now + Duration::days(days);
         let jti = Uuid::now_v7().to_string();
 
         let claims = RefreshTokenClaims {
             sub: user_id,
-            username: username.to_string(),
             exp: expire.timestamp() as usize,
             iat: now.timestamp() as usize,
             jti: jti.clone(),
             token_type: "refresh".to_string(),
         };
         let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))?;
-        Ok((token, jti))
+        Ok((token, jti, expire.timestamp() as usize))
     }
 
-    /// Validate a refresh JWT token and return the claims
+    /// Validate Refresh Token
     pub fn validate_refresh_token(token: &str) -> Result<RefreshTokenClaims, jsonwebtoken::errors::Error> {
         let cfg = Config::init();
         let decoding_key = DecodingKey::from_secret(cfg.jwt_secret.as_bytes());
@@ -123,7 +107,6 @@ impl JwtUtils {
         validation.validate_exp = true;
 
         let token_data = decode::<RefreshTokenClaims>(token, &decoding_key, &validation)?;
-        // Additional check to ensure this is indeed a refresh token
         if token_data.claims.token_type != "refresh" {
             return Err(jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::InvalidToken));
         }

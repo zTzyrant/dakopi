@@ -1,13 +1,13 @@
 meta {
-  name: "Logout"
-  type: "http"
+  name: Logout
+  type: http
   seq: 7
 }
 
 post {
   url: {{base_url}}/api/auth/logout
   body: json
-  auth: none
+  auth: inherit
 }
 
 body:json {

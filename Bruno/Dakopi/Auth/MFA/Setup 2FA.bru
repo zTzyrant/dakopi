@@ -1,0 +1,17 @@
+meta {
+  name: Setup 2FA
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/api/auth/2fa/setup
+  body: none
+  auth: inherit
+}
+
+script:post-response {
+  if(res.body.data.secret){
+    bru.setVar("secret", res.body.data.secret)
+  }
+}

@@ -1,6 +1,8 @@
 use crate::config::AppState;
-use crate::utils::api_response::ResponseBuilder; // Import ResponseBuilder kamu
+use crate::utils::api_response::ResponseBuilder;
 use crate::utils::jwt_utils::JwtUtils;
+use crate::models::auth_model::CurrentUser;
+use crate::entities::{user, user_role, role};
 use axum::{
     body::Body,
     extract::State,
@@ -10,17 +12,17 @@ use axum::{
 };
 use casbin::CoreApi;
 use jsonwebtoken::errors::ErrorKind;
+use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
 
 pub async fn rbac_middleware(
     State(state): State<AppState>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> std::result::Result<Response, StatusCode> {
     // 1. Get Token from Header
     let auth_header = match req.headers().get(header::AUTHORIZATION) {
         Some(header) => header,
         None => {
-            // Menggunakan ResponseBuilder
             return Ok(ResponseBuilder::error::<()>(
                 StatusCode::UNAUTHORIZED,
                 "AUTH_MISSING",
@@ -57,7 +59,6 @@ pub async fn rbac_middleware(
     let token_data = match JwtUtils::validate_jwt(token) {
         Ok(data) => data,
         Err(e) => {
-            // Deteksi jenis error token
             let (code, message) = match e.kind() {
                 ErrorKind::ExpiredSignature => ("TOKEN_EXPIRED", "Token has expired"),
                 ErrorKind::InvalidToken => ("TOKEN_INVALID", "Token is invalid"),
@@ -65,9 +66,6 @@ pub async fn rbac_middleware(
                 _ => ("AUTH_FAILED", "Authentication failed"),
             };
 
-            tracing::error!("JWT Validation failed: {}", e);
-
-            // Return error menggunakan standar ResponseBuilder kamu
             return Ok(
                 ResponseBuilder::error::<()>(StatusCode::UNAUTHORIZED, code, message)
                     .into_response(),
@@ -75,21 +73,52 @@ pub async fn rbac_middleware(
         }
     };
 
-    let user_sub = token_data.claims.sub.to_string();
+    let claims = token_data.claims;
+    let user_id = claims.sub;
 
-    // 3. Get Path and Method
+    // 3. Check Blacklist (Redis)
+    let blacklist_key = format!("blacklist:token:{}", claims.jti);
+    let is_blacklisted = state.redis_service.exists(&blacklist_key).await;
+
+    if is_blacklisted {
+        return Ok(ResponseBuilder::error::<()>(
+            StatusCode::UNAUTHORIZED,
+            "TOKEN_REVOKED",
+            "This session has been logged out",
+        ).into_response());
+    }
+
+    // 4. Get User Data (Cache -> DB)
+    let user_cache_key = format!("user:{}", user_id);
+    let cached_user: Option<CurrentUser> = state.redis_service.get(&user_cache_key).await;
+
+    let current_user = if let Some(user) = cached_user {
+        // Cache Hit
+        user
+    } else {
+        // Cache Miss
+        let user = fetch_user_from_db(&state.db, user_id).await?;
+        
+        // Cache it (TTL 15 mins matching access token default)
+        let _ = state.redis_service.set(&user_cache_key, &user, 15 * 60).await;
+        user
+    };
+    
+    // 5. Inject CurrentUser into request
+    req.extensions_mut().insert(current_user.clone());
+
+    // 6. Casbin Enforce
+    let enforcer = state.enforcer.read().await;
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
-
-    // 4. Check Permission via Casbin
-    let enforcer = state.enforcer.read().await;
-
-    match enforcer.enforce((&user_sub, &path, &method)) {
+    
+    // Check permission for "user" (ID) or "roles"
+    // Usually RBAC checks role-based. Here we check subject = user_id (string)
+    // You might want to check against ROLES in future.
+    match enforcer.enforce((&user_id.to_string(), &path, &method)) {
         Ok(true) => Ok(next.run(req).await),
         Ok(false) => {
-            tracing::warn!("Access denied for user {} at {} {}", user_sub, method, path);
-
-            // Return Forbidden Error
+            tracing::warn!("Access denied for user {} at {} {}", user_id, method, path);
             Ok(ResponseBuilder::error::<()>(
                 StatusCode::FORBIDDEN,
                 "ACCESS_DENIED",
@@ -99,8 +128,6 @@ pub async fn rbac_middleware(
         }
         Err(e) => {
             tracing::error!("Casbin enforce error: {}", e);
-
-            // Internal Server Error
             Ok(ResponseBuilder::error::<()>(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL_ERROR",
@@ -109,4 +136,36 @@ pub async fn rbac_middleware(
             .into_response())
         }
     }
+}
+
+async fn fetch_user_from_db(
+    db: &sea_orm::DatabaseConnection,
+    user_id: uuid::Uuid,
+) -> Result<CurrentUser, StatusCode> {
+    // Fetch User
+    let user = user::Entity::find()
+        .filter(user::Column::PublicId.eq(user_id))
+        .one(db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Fetch Roles
+    // Join user -> user_roles -> roles
+    let roles: Vec<String> = user_role::Entity::find()
+        .filter(user_role::Column::UserId.eq(user.id))
+        .find_also_related(role::Entity)
+        .all(db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .filter_map(|(_ur, r)| r.map(|role| role.name))
+        .collect();
+
+    Ok(CurrentUser {
+        id: user.public_id,
+        username: user.username,
+        email: user.email,
+        roles,
+    })
 }

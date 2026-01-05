@@ -10,11 +10,14 @@ use axum::http::StatusCode;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, ActiveValue::Set, TransactionTrait, ActiveModelTrait};
 use uuid::Uuid;
 use chrono::{Utc, Duration};
+use totp_rs::{Algorithm, TOTP, Secret};
+use rand_core::RngCore;
+use crate::config::Config;
 
 use crate::repositories::user_repository::UserRepository;
 use crate::config::AppState;
 use crate::entities::{user, role, user_role, session, email_verification_token, password_reset_token};
-use crate::models::auth_model::{ProfileResponse, RoleInfo};
+use crate::models::auth_model::{ProfileResponse, RoleInfo, TwoFaSetupResponse, SessionResponse};
 use crate::utils::jwt_utils::JwtUtils;
 
 pub struct AuthService;
@@ -119,12 +122,15 @@ impl AuthService {
     }
 
     pub async fn login_user(
-        db: &DatabaseConnection,
+        state: &AppState,
         login_id: String,
         password: String,
+        remember_me: bool,
         user_agent: Option<String>,
         ip_address: Option<String>,
-    ) -> Result<(String, Option<String>, String), (StatusCode, &'static str, String)> {
+    ) -> Result<(String, usize, Option<String>, Option<usize>, String, bool), (StatusCode, &'static str, String)> {
+        let db = &state.db;
+
         let user = UserRepository::find_active_by_login_id(db, &login_id)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
@@ -137,11 +143,24 @@ impl AuthService {
             return Err((StatusCode::UNAUTHORIZED, "AUTH_FAILED", "Invalid username or password".to_string()));
         }
 
-        // Generate Tokens
-        let token = Self::generate_jwt(user.public_id, &user.username)
+        // Check if 2FA is enabled
+        if user.two_factor_enabled.unwrap_or(false) {
+            let temp_token = JwtUtils::generate_2fa_temp_token(user.public_id)
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
+            
+            // Return temp_token and flag that 2FA is required
+            return Ok((temp_token, 0, None, None, "2FA_REQUIRED".to_string(), true));
+        }
+
+        // Generate Access Token
+        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
-        let (refresh_token, jti) = JwtUtils::generate_refresh_token(user.public_id, &user.username)
+        // Generate Refresh Token
+        let cfg = Config::init();
+        let refresh_days = if remember_me { cfg.jwt_remember_days } else { cfg.jwt_refresh_days };
+        
+        let (refresh_token, jti, refresh_exp) = JwtUtils::generate_refresh_token(user.public_id, refresh_days)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Refresh token generation failed".to_string()))?;
 
         // Create Session
@@ -152,7 +171,7 @@ impl AuthService {
             user_agent: Set(user_agent),
             ip_address: Set(ip_address),
             last_activity: Set(Utc::now()),
-            expires_at: Set(Utc::now() + Duration::days(7)), // Match refresh token expiry
+            expires_at: Set(Utc::now() + Duration::days(refresh_days)), 
             created_at: Set(Utc::now()),
             revoked_at: Set(None),
             ..Default::default()
@@ -161,7 +180,271 @@ impl AuthService {
         session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
 
-        Ok((token, Some(refresh_token), "Bearer".to_string()))
+        Ok((token, token_exp, Some(refresh_token), Some(refresh_exp), "Bearer".to_string(), false))
+    }
+
+    pub async fn generate_2fa_setup(
+        db: &DatabaseConnection,
+        user_id: Uuid,
+    ) -> Result<TwoFaSetupResponse, (StatusCode, &'static str, String)> {
+        let user = user::Entity::find()
+            .filter(user::Column::PublicId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        // Generate Random Secret (20 bytes for SHA1)
+        let mut secret_bytes = [0u8; 20];
+        rand_core::OsRng.fill_bytes(&mut secret_bytes);
+        
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            secret_bytes.to_vec(),
+            Some("Dakopi".to_string()),
+            user.email.clone(),
+
+        ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_ERR", format!("Failed to generate TOTP: {}", e)))?;
+
+        let secret = totp.get_secret_base32();
+        let qr_code_url = totp.get_qr_base64().map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "QR_ERR", "Failed to generate QR code".to_string()))?;
+
+        Ok(TwoFaSetupResponse {
+            secret,
+            qr_code_url,
+        })
+    }
+
+    pub async fn enable_2fa(
+        db: &DatabaseConnection,
+        user_id: Uuid,
+        secret: String,
+        code: String,
+    ) -> Result<(), (StatusCode, &'static str, String)> {
+        let user = user::Entity::find()
+            .filter(user::Column::PublicId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        // Decode Secret (Base32 -> Bytes)
+        let secret_bytes = Secret::Encoded(secret.clone())
+            .to_bytes()
+            .map_err(|_| (StatusCode::BAD_REQUEST, "INVALID_SECRET", "Invalid secret format".to_string()))?;
+
+        // Verify Code
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            secret_bytes,
+            Some("Dakopi".to_string()),
+            user.email.clone(),
+        ).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_ERR", "Failed to initialize TOTP".to_string()))?;
+
+        if !totp.check_current(&code).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_CHECK_ERR", "Failed to check code".to_string()))? {
+            return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid verification code".to_string()));
+        }
+
+        // Update User
+        let mut user_active: user::ActiveModel = user.into();
+        user_active.two_factor_enabled = Set(Some(true));
+        user_active.two_factor_secret = Set(Some(secret));
+        user_active.update(db).await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update user 2FA status".to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn verify_2fa_login(
+        db: &DatabaseConnection,
+        temp_token: String,
+        code: String,
+        user_agent: Option<String>,
+        ip_address: Option<String>,
+    ) -> Result<(String, usize, Option<String>, Option<usize>, String), (StatusCode, &'static str, String)> {
+        // 1. Validate Temp Token
+        let claims = JwtUtils::validate_2fa_temp_token(&temp_token)
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "INVALID_TEMP_TOKEN", "Temporary token invalid or expired".to_string()))?;
+
+        // 2. Find User
+        let user = user::Entity::find()
+            .filter(user::Column::PublicId.eq(claims.sub))
+            .one(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        let secret = user.two_factor_secret.as_ref()
+            .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "MFA_NOT_CONFIGURED", "MFA is not configured for this user".to_string()))?;
+
+        // Decode Secret (Base32 -> Bytes)
+        let secret_bytes = Secret::Encoded(secret.clone())
+            .to_bytes()
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "INVALID_STORED_SECRET", "Stored secret is invalid".to_string()))?;
+
+        // 3. Verify TOTP Code
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            secret_bytes,
+            Some("Dakopi".to_string()),
+            user.email.clone(),
+        ).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_ERR", "Failed to initialize TOTP".to_string()))?;
+
+        if !totp.check_current(&code).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_CHECK_ERR", "Failed to check code".to_string()))? {
+            return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid MFA code".to_string()));
+        }
+
+        // 4. Generate Final Tokens
+        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
+
+        let cfg = Config::init();
+        let (refresh_token, jti, refresh_exp) = JwtUtils::generate_refresh_token(user.public_id, cfg.jwt_refresh_days)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Refresh token generation failed".to_string()))?;
+
+        // 5. Create Session
+        let session = session::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            user_id: Set(user.id),
+            refresh_token_jti: Set(jti),
+            user_agent: Set(user_agent),
+            ip_address: Set(ip_address),
+            last_activity: Set(Utc::now()),
+            expires_at: Set(Utc::now() + Duration::days(cfg.jwt_refresh_days)),
+            created_at: Set(Utc::now()),
+            revoked_at: Set(None),
+            ..Default::default()
+        };
+
+        session.insert(db).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
+
+        Ok((token, token_exp, Some(refresh_token), Some(refresh_exp), "Bearer".to_string()))
+    }
+
+    pub async fn disable_2fa(
+        db: &DatabaseConnection,
+        user_id: Uuid,
+        password: String,
+    ) -> Result<(), (StatusCode, &'static str, String)> {
+        let user = user::Entity::find()
+            .filter(user::Column::PublicId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        // Verify Password first
+        let is_valid = Self::verify_password(password, &user.password_hash)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HASH_ERR", "Password verification failed".to_string()))?;
+
+        if !is_valid {
+            return Err((StatusCode::UNAUTHORIZED, "INVALID_PASSWORD", "Invalid password".to_string()));
+        }
+
+        // Update User
+        let mut user_active: user::ActiveModel = user.into();
+        user_active.two_factor_enabled = Set(Some(false));
+        user_active.two_factor_secret = Set(None);
+        user_active.update(db).await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to disable 2FA".to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn get_user_sessions(
+        db: &DatabaseConnection,
+        user_id: Uuid,
+        current_jti: Option<String>,
+    ) -> Result<Vec<SessionResponse>, (StatusCode, &'static str, String)> {
+        // Find DB ID for user
+        let user = user::Entity::find()
+             .filter(user::Column::PublicId.eq(user_id))
+             .one(db)
+             .await
+             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+             .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        let sessions = session::Entity::find()
+            .filter(session::Column::UserId.eq(user.id))
+            .filter(session::Column::RevokedAt.is_null())
+            .filter(session::Column::ExpiresAt.gt(Utc::now()))
+            .all(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error finding sessions".to_string()))?;
+
+        let response = sessions.into_iter().map(|s| SessionResponse {
+            id: s.id,
+            user_agent: s.user_agent,
+            ip_address: s.ip_address,
+            device_type: s.device_type,
+            last_activity: s.last_activity,
+            created_at: s.created_at,
+            is_current: current_jti.as_ref().map(|jti| jti == &s.refresh_token_jti).unwrap_or(false),
+        }).collect();
+
+        Ok(response)
+    }
+
+    pub async fn revoke_session(
+        db: &DatabaseConnection,
+        user_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), (StatusCode, &'static str, String)> {
+         // Find DB ID for user first
+        let user = user::Entity::find()
+             .filter(user::Column::PublicId.eq(user_id))
+             .one(db)
+             .await
+             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+             .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        let session = session::Entity::find_by_id(session_id)
+            .filter(session::Column::UserId.eq(user.id))
+            .one(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "SESSION_NOT_FOUND", "Session not found or not owned by user".to_string()))?;
+
+        let mut session_active: session::ActiveModel = session.into();
+        session_active.revoked_at = Set(Some(Utc::now()));
+        session_active.update(db).await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to revoke session".to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn revoke_all_sessions(
+        db: &DatabaseConnection,
+        user_id: Uuid,
+    ) -> Result<(), (StatusCode, &'static str, String)> {
+         let user = user::Entity::find()
+             .filter(user::Column::PublicId.eq(user_id))
+             .one(db)
+             .await
+             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+             .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        use sea_orm::sea_query::Expr;
+
+        session::Entity::update_many()
+            .col_expr(session::Column::RevokedAt, Expr::value(Utc::now()))
+            .filter(session::Column::UserId.eq(user.id))
+            .filter(session::Column::RevokedAt.is_null())
+            .exec(db)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", format!("Failed to revoke sessions: {}", e)))?;
+
+        Ok(())
     }
 
     pub async fn refresh_token(
@@ -185,17 +468,22 @@ impl AuthService {
         }
         
         // 3. Generate New Tokens
-        let new_access_token = Self::generate_jwt(claims.sub, &claims.username)
+        // Access token
+        let (new_access_token, _, _) = JwtUtils::generate_jwt(claims.sub)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
-        let (new_refresh_token, new_jti) = JwtUtils::generate_refresh_token(claims.sub, &claims.username)
+        // Refresh token (maintain existing duration/type? For now default 7 days again or same as original config)
+        // Ideally we check if it was "remember me" session, but for now we reset to default or use session duration
+        // Let's use Config default
+        let cfg = Config::init();
+        let (new_refresh_token, new_jti, _) = JwtUtils::generate_refresh_token(claims.sub, cfg.jwt_refresh_days)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
         // 4. Update Session (Rotate JTI)
         let mut session_active: session::ActiveModel = session.into();
         session_active.refresh_token_jti = Set(new_jti);
         session_active.last_activity = Set(Utc::now());
-        session_active.expires_at = Set(Utc::now() + Duration::days(7));
+        session_active.expires_at = Set(Utc::now() + Duration::days(cfg.jwt_refresh_days));
         
         session_active.update(db).await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update session".to_string()))?;
@@ -204,30 +492,39 @@ impl AuthService {
     }
 
     pub async fn logout_user(
-        db: &DatabaseConnection,
-        token: String
+        state: &AppState,
+        access_token: String,
+        refresh_token: String
     ) -> Result<(), (StatusCode, &'static str, String)> {
-        // Try to decode token (either access or refresh) to get JTI if possible, 
-        // OR simply blacklist the token if it's an access token.
-        // For 'BetterAuth' standard, we usually revoke the session linked to the Refresh Token JTI.
-        
-        // Scenario: Client sends Access Token. Access Token usually doesn't have JTI in our simple impl (only Refresh has).
-        // If client sends Refresh Token to logout, we revoke session.
-        
-        let claims = JwtUtils::validate_refresh_token(&token)
-            .map_err(|_| (StatusCode::BAD_REQUEST, "INVALID_TOKEN", "Invalid token".to_string()))?;
+        // 1. Blacklist Access Token (Redis)
+        if let Ok(token_data) = JwtUtils::validate_jwt(&access_token) {
+             let claims = token_data.claims;
+             let now = Utc::now().timestamp() as usize;
+             
+             if claims.exp > now {
+                 let ttl = claims.exp - now;
+                 let key = format!("blacklist:token:{}", claims.jti);
+                 // We store "revoked" string. RedisService::set serializes it to "\"revoked\"", which is fine.
+                 let _ = state.redis_service.set(&key, "revoked", ttl as u64).await;
+             }
+        }
 
-        let session = session::Entity::find()
-            .filter(session::Column::RefreshTokenJti.eq(&claims.jti))
-            .one(db)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?;
+        // 2. Revoke Refresh Token Session (DB)
+        if !refresh_token.is_empty() {
+             if let Ok(claims) = JwtUtils::validate_refresh_token(&refresh_token) {
+                let session = session::Entity::find()
+                    .filter(session::Column::RefreshTokenJti.eq(&claims.jti))
+                    .one(&state.db)
+                    .await
+                    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?;
 
-        if let Some(session) = session {
-            let mut session_active: session::ActiveModel = session.into();
-            session_active.revoked_at = Set(Some(Utc::now()));
-            session_active.update(db).await
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to revoke session".to_string()))?;
+                if let Some(session) = session {
+                    let mut session_active: session::ActiveModel = session.into();
+                    session_active.revoked_at = Set(Some(Utc::now()));
+                    session_active.update(&state.db).await
+                        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to revoke session".to_string()))?;
+                }
+             }
         }
 
         Ok(())
@@ -374,18 +671,26 @@ impl AuthService {
         (StatusCode::CONFLICT, code, msg.to_string())
     }
 
-    fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        Ok(argon2.hash_password(password.as_bytes(), &salt)?.to_string())
+        fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
+
+            let salt = SaltString::generate(&mut OsRng);
+
+            let argon2 = Argon2::default();
+
+            Ok(argon2.hash_password(password.as_bytes(), &salt)?.to_string())
+
+        }
+
+    
+
+        fn verify_password(password: String, hash: &str) -> Result<bool, argon2::password_hash::Error> {
+
+            let parsed_hash = PasswordHash::new(hash)?;
+
+            Ok(Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok())
+
+        }
+
     }
 
-    fn verify_password(password: String, hash: &str) -> Result<bool, argon2::password_hash::Error> {
-        let parsed_hash = PasswordHash::new(hash)?;
-        Ok(Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok())
-    }
-
-    fn generate_jwt(user_id: Uuid, username: &str) -> Result<String, jsonwebtoken::errors::Error> {
-        JwtUtils::generate_jwt(user_id, username)
-    }
-}
+    

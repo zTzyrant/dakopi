@@ -995,41 +995,41 @@ CREATE INDEX idx_organization_members_user_id ON organization_members(user_id);
 
 ```
 POST   /api/v1/auth/register                 - Register new user
-POST   /api/v1/auth/login                    - Login with credentials
-POST   /api/v1/auth/logout                   - Logout (revoke current session)
+POST   /api/v1/auth/login                    - Login with credentials (supports remember_me)
+POST   /api/v1/auth/logout                   - Logout (revoke current session & blacklist access token)
 POST   /api/v1/auth/refresh                  - Refresh access token
-GET    /api/v1/auth/me                       - Get current user
+GET    /api/v1/auth/me                       - Get current user (Profile)
 
 POST   /api/v1/auth/verify-email             - Send verification email
-GET    /api/v1/auth/verify-email/:token      - Verify email with token
+GET    /api/v1/auth/verify-email/{token}     - Verify email with token
 
 POST   /api/v1/auth/password/forgot          - Request password reset
 POST   /api/v1/auth/password/reset           - Reset password with token
 POST   /api/v1/auth/password/change          - Change password (authenticated)
 
 GET    /api/v1/auth/sessions                 - List all sessions
-DELETE /api/v1/auth/sessions/:id             - Revoke specific session
+DELETE /api/v1/auth/sessions/{id}            - Revoke specific session
 DELETE /api/v1/auth/sessions                 - Revoke all sessions (except current)
 ```
 
-### OAuth Endpoints
+### OAuth Endpoints (Planned)
 
 ```
-GET    /api/v1/auth/oauth/:provider          - Initiate OAuth flow
-GET    /api/v1/auth/oauth/:provider/callback - OAuth callback handler
-POST   /api/v1/auth/oauth/:provider/link     - Link OAuth account
-DELETE /api/v1/auth/oauth/:provider          - Unlink OAuth account
+GET    /api/v1/auth/oauth/{provider}          - Initiate OAuth flow
+GET    /api/v1/auth/oauth/{provider}/callback - OAuth callback handler
+POST   /api/v1/auth/oauth/{provider}/link     - Link OAuth account
+DELETE /api/v1/auth/oauth/{provider}          - Unlink OAuth account
 ```
 
 ### MFA Endpoints
 
 ```
-POST   /api/v1/auth/2fa/setup                - Setup 2FA (get QR code)
-POST   /api/v1/auth/2fa/verify               - Verify 2FA setup
-POST   /api/v1/auth/2fa/disable              - Disable 2FA
-POST   /api/v1/auth/2fa/verify-login         - Verify 2FA during login
-GET    /api/v1/auth/2fa/backup-codes         - Get backup codes
-POST   /api/v1/auth/2fa/backup-codes/regenerate - Regenerate backup codes
+POST   /api/v1/auth/2fa/setup                - Setup 2FA (returns secret & QR base64)
+POST   /api/v1/auth/2fa/confirm              - Confirm & Enable 2FA
+POST   /api/v1/auth/2fa/disable              - Disable 2FA (requires password)
+POST   /api/v1/auth/2fa/verify-login         - Verify 2FA during login (exchange temp token)
+GET    /api/v1/auth/2fa/backup-codes         - Get backup codes (Planned)
+POST   /api/v1/auth/2fa/backup-codes/regenerate - Regenerate backup codes (Planned)
 ```
 
 ### Example Request/Response
@@ -1264,35 +1264,37 @@ mod integration_tests {
 
 ## Migration Path
 
-### Phase 1: Core Authentication (Week 1-2)
-- [ ] Setup database schema
-- [ ] Implement password hashing
-- [ ] Basic registration & login
-- [ ] JWT token generation & verification
-- [ ] Basic session management
-- [ ] Email verification
+### Phase 1: Core Authentication (Completed ✅)
+- [x] Setup database schema
+- [x] Implement password hashing
+- [x] Basic registration & login
+- [x] JWT token generation & verification
+- [x] Basic session management
+- [x] Email verification
 
-### Phase 2: Enhanced Security (Week 3-4)
-- [ ] Rate limiting
-- [ ] CSRF protection
-- [ ] Refresh token rotation
-- [ ] Session management (multiple devices)
-- [ ] Audit logging
-- [ ] Password reset flow
+### Phase 2: Enhanced Security (Completed ✅)
+- [x] Rate limiting
+- [x] CSRF protection (via Header/Cookie check)
+- [x] Refresh token rotation
+- [x] Session management (Get All, Revoke, Revoke All)
+- [x] Token Blacklist (Redis-based Access Token revocation)
+- [x] User Data Caching (Redis)
+- [ ] Audit logging (Schema ready, Logic pending)
+- [x] Password reset flow
 
-### Phase 3: OAuth & Social Login (Week 5-6)
+### Phase 3: OAuth & Social Login (Pending)
 - [ ] OAuth2 framework setup
 - [ ] Google OAuth
 - [ ] GitHub OAuth
 - [ ] Facebook OAuth
 - [ ] Account linking
 
-### Phase 4: Advanced Features (Week 7-8)
-- [ ] Two-Factor Authentication (TOTP)
+### Phase 4: Advanced Features (Partially Completed)
+- [x] Two-Factor Authentication (TOTP)
 - [ ] Backup codes
 - [ ] SMS OTP (optional)
+- [x] RBAC implementation (Casbin)
 - [ ] Organization/Multi-tenancy
-- [ ] RBAC implementation
 
 ### Phase 5: Enterprise Features (Future)
 - [ ] SSO (SAML 2.0)
@@ -1350,11 +1352,11 @@ dotenvy = "0.15"
 tokio = { version = "1", features = ["full"] }
 
 # 2FA
-totp-rs = "5"
+totp-rs = { version = "5", features = ["qr"] }
 qrcode = "0.14"
 
-# Rate Limiting (optional: use Redis)
-redis = { version = "0.26", features = ["tokio-comp"], optional = true }
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp"] }
 ```
 
 ---

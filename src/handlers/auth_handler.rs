@@ -1,6 +1,6 @@
 use axum::{
-    extract::State,
-    response::IntoResponse,
+    extract::{State, Extension, Path},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -8,12 +8,48 @@ use crate::config::AppState;
 use crate::models::auth_model::{
     LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, 
     ResetEmailLimitRequest, ProfileResponse,
-    VerifyEmailRequest, ForgotPasswordRequest, ResetPasswordRequest
+    VerifyEmailRequest, ForgotPasswordRequest, ResetPasswordRequest,
+    TwoFaConfirmRequest, TwoFaLoginRequest, TwoFaLoginRequiredResponse,
+    TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser
 };
 use crate::services::auth_service::AuthService;
 use crate::utils::api_response::ResponseBuilder;
 use crate::utils::validated_wrapper::ValidatedJson; 
 
+// ... (handlers)
+
+// 4. SESSION HANDLERS
+
+pub async fn get_sessions_handler(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Response {
+    match AuthService::get_user_sessions(&state.db, user.id, None).await {
+        Ok(sessions) => ResponseBuilder::success("SESSIONS_FETCHED", "Active sessions", sessions).into_response(),
+        Err((status, code, msg)) => ResponseBuilder::error::<Vec<SessionResponse>>(status, code, &msg).into_response(),
+    }
+}
+
+pub async fn revoke_session_handler(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(session_id): Path<uuid::Uuid>,
+) -> Response {
+    match AuthService::revoke_session(&state.db, user.id, session_id).await {
+        Ok(_) => ResponseBuilder::success::<()>("SESSION_REVOKED", "Session revoked successfully", ()).into_response(),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
+    }
+}
+
+pub async fn revoke_all_sessions_handler(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Response {
+    match AuthService::revoke_all_sessions(&state.db, user.id).await {
+        Ok(_) => ResponseBuilder::success::<()>("SESSIONS_REVOKED", "All sessions revoked successfully", ()).into_response(),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
+    }
+}
 // 1. HANDLER REGISTER
 pub async fn register_user_handler(
     State(state): State<AppState>,
@@ -55,23 +91,132 @@ pub async fn login_user_handler(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     ValidatedJson(payload): ValidatedJson<LoginRequest>,
-) -> impl IntoResponse {
+) -> Response {
     let user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
     let ip_address = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
 
     match AuthService::login_user(
-        &state.db,
+        &state,
         payload.login_id,
         payload.password,
+        payload.remember_me,
         user_agent,
         ip_address
     ).await {
-        Ok((token, refresh_token, type_)) => ResponseBuilder::success(
+        Ok((token, token_exp, refresh_token, refresh_exp, type_, is_mfa_required)) => {
+            if is_mfa_required {
+                return ResponseBuilder::fail_with_data(
+                    axum::http::StatusCode::ACCEPTED,
+                    "TWO_FACTOR_REQUIRED",
+                    "Two-factor authentication is required",
+                    TwoFaLoginRequiredResponse { temp_token: token }
+                ).into_response();
+            }
+
+            ResponseBuilder::success(
+                "AUTH_LOGIN_SUCCESS",
+                "Login successful",
+                LoginResponse { 
+                    token, 
+                    token_expires_at: token_exp,
+                    refresh_token, 
+                    refresh_token_expires_at: refresh_exp,
+                    type_ 
+                }
+            ).into_response()
+        },
+        Err((status, code, message)) => ResponseBuilder::error::<LoginResponse>(status, code, &message).into_response(),
+    }
+}
+
+// 2.1 HANDLER SETUP 2FA
+pub async fn setup_2fa_handler(
+    State(state): State<AppState>,
+    // TODO: Ambil user_id dari JWT middleware nantinya
+) -> Response {
+    // Simulasi ambil user pertama sementara middleware auth belum terpasang sempurna di handler ini
+    use crate::entities::user::{Entity as User};
+    use sea_orm::{EntityTrait, QueryOrder};
+
+    let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
+        Ok(Some(u)) => u,
+        _ => return ResponseBuilder::error::<TwoFaSetupResponse>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found").into_response(),
+    };
+
+    match AuthService::generate_2fa_setup(&state.db, user.public_id).await {
+        Ok(data) => ResponseBuilder::success("2FA_SETUP_READY", "Scan this QR code", data).into_response(),
+        Err((status, code, msg)) => ResponseBuilder::error::<TwoFaSetupResponse>(status, code, &msg).into_response(),
+    }
+}
+
+// 2.2 HANDLER CONFIRM 2FA
+pub async fn confirm_2fa_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<TwoFaConfirmRequest>,
+) -> impl IntoResponse {
+    // Simulasi ambil user pertama
+    use crate::entities::user::{Entity as User};
+    use sea_orm::{EntityTrait, QueryOrder};
+
+    let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
+        Ok(Some(u)) => u,
+        _ => return ResponseBuilder::error::<()>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found"),
+    };
+
+    match AuthService::enable_2fa(&state.db, user.public_id, payload.secret, payload.code).await {
+        Ok(_) => ResponseBuilder::success::<()>("2FA_ENABLED", "Two-factor authentication enabled", ()),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
+    }
+}
+
+// 2.3 HANDLER VERIFY 2FA LOGIN
+pub async fn verify_2fa_login_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    ValidatedJson(payload): ValidatedJson<TwoFaLoginRequest>,
+) -> Response {
+    let user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+    let ip_address = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+
+    match AuthService::verify_2fa_login(
+        &state.db,
+        payload.temp_token,
+        payload.code,
+        user_agent,
+        ip_address
+    ).await {
+        Ok((token, token_exp, refresh_token, refresh_exp, type_)) => ResponseBuilder::success(
             "AUTH_LOGIN_SUCCESS",
-            "Login successful",
-            LoginResponse { token, refresh_token, type_ }
-        ),
-        Err((status, code, message)) => ResponseBuilder::error::<LoginResponse>(status, code, &message),
+            "MFA Login successful",
+            LoginResponse { 
+                token, 
+                token_expires_at: token_exp,
+                refresh_token, 
+                refresh_token_expires_at: refresh_exp,
+                type_ 
+            }
+        ).into_response(),
+        Err((status, code, message)) => ResponseBuilder::error::<LoginResponse>(status, code, &message).into_response(),
+    }
+}
+
+// 2.4 HANDLER DISABLE 2FA
+pub async fn disable_2fa_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<TwoFaDisableRequest>,
+) -> Response {
+    // Simulasi ambil user pertama
+    use crate::entities::user::{Entity as User};
+    use sea_orm::{EntityTrait, QueryOrder};
+
+    let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
+        Ok(Some(u)) => u,
+        _ => return ResponseBuilder::error::<()>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found").into_response(),
+    };
+
+    match AuthService::disable_2fa(&state.db, user.public_id, payload.password).await {
+        Ok(_) => ResponseBuilder::success::<()>("2FA_DISABLED", "Two-factor authentication disabled", ()).into_response(),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
     }
 }
 
@@ -181,9 +326,17 @@ pub async fn refresh_token_handler(
 // 7. HANDLER LOGOUT
 pub async fn logout_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     ValidatedJson(payload): ValidatedJson<RefreshTokenRequest>, 
 ) -> impl IntoResponse {
-    match AuthService::logout_user(&state.db, payload.refresh_token).await {
+    let access_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .unwrap_or("")
+        .to_string();
+
+    match AuthService::logout_user(&state, access_token, payload.refresh_token).await {
         Ok(_) => ResponseBuilder::success::<()>(
             "LOGOUT_SUCCESS",
             "Successfully logged out",

@@ -1,0 +1,11 @@
+meta {
+  name: Revoke All Sessions
+  type: http
+  seq: 2
+}
+
+delete {
+  url: {{base_url}}/api/auth/sessions
+  body: none
+  auth: inherit
+}

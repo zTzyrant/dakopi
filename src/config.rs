@@ -8,7 +8,9 @@ pub struct Config {
     pub server_port: u16,
     pub database_url: String,
     pub jwt_secret: String,
-    pub jwt_expires_in: i64,
+    pub jwt_access_minutes: i64,
+    pub jwt_refresh_days: i64,
+    pub jwt_remember_days: i64,
     pub redis_url: String,
     pub smtp_from: String,
     pub brevo_api_key: String,
@@ -38,10 +40,21 @@ impl Config {
 
         let database_url = env::var("DATABASE_URL").expect("DATABASE_URL wajib diisi di .env");
         let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET wajib diisi di .env");
-        let jwt_expires_in = env::var("JWT_EXPIRATION_MINUTES")
+        
+        let jwt_access_minutes = env::var("JWT_ACCESS_MINUTES")
             .unwrap_or_else(|_| "15".to_string())
             .parse::<i64>()
-            .expect("JWT_EXPIRATION_MINUTES harus angka");
+            .expect("JWT_ACCESS_MINUTES harus angka");
+            
+        let jwt_refresh_days = env::var("JWT_REFRESH_DAYS")
+            .unwrap_or_else(|_| "7".to_string())
+            .parse::<i64>()
+            .expect("JWT_REFRESH_DAYS harus angka");
+
+        let jwt_remember_days = env::var("JWT_REMEMBER_DAYS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse::<i64>()
+            .expect("JWT_REMEMBER_DAYS harus angka");
         
         let redis_url = std::env::var("REDIS_URL").expect("REDIS_URL wajib");
         
@@ -58,7 +71,9 @@ impl Config {
             server_port,
             database_url,
             jwt_secret,
-            jwt_expires_in,
+            jwt_access_minutes,
+            jwt_refresh_days,
+            jwt_remember_days,
             redis_url,
             smtp_from,
             brevo_api_key,
