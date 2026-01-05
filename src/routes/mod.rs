@@ -14,8 +14,8 @@ use crate::utils::api_response::ResponseBuilder;
 pub fn create_routes(state: AppState) -> Router<AppState> {
   let api_routes = Router::new()
     .route("/health", get(health_check_handler))
-    .nest("/auth", auth_routes())
-    .nest("/admin", admin_routes(state))
+    .nest("/auth", auth_routes(state.clone()))
+    .nest("/admin", admin_routes(state.clone()))
     .nest("/imagekit", imagekit_routes());
 
   Router::new()

@@ -5,7 +5,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 use crate::config::AppState;
-use crate::models::auth_model::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, ResetEmailLimitRequest, ProfileResponse};
+use crate::models::auth_model::{
+    LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, 
+    ResetEmailLimitRequest, ProfileResponse,
+    VerifyEmailRequest, ForgotPasswordRequest, ResetPasswordRequest
+};
 use crate::services::auth_service::AuthService;
 use crate::utils::api_response::ResponseBuilder;
 use crate::utils::validated_wrapper::ValidatedJson; 
@@ -49,12 +53,18 @@ pub async fn register_user_handler(
 // 2. HANDLER LOGIN
 pub async fn login_user_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     ValidatedJson(payload): ValidatedJson<LoginRequest>,
 ) -> impl IntoResponse {
+    let user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+    let ip_address = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+
     match AuthService::login_user(
         &state.db,
         payload.login_id,
-        payload.password
+        payload.password,
+        user_agent,
+        ip_address
     ).await {
         Ok((token, refresh_token, type_)) => ResponseBuilder::success(
             "AUTH_LOGIN_SUCCESS",
@@ -135,7 +145,6 @@ pub async fn profile_handler(
 }
 
 // 6. HANDLER REFRESH TOKEN
-use crate::utils::jwt_utils::JwtUtils;
 
 #[derive(Deserialize, Validate)]
 pub struct RefreshTokenRequest {
@@ -152,37 +161,79 @@ pub struct RefreshTokenResponse {
 }
 
 pub async fn refresh_token_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     ValidatedJson(payload): ValidatedJson<RefreshTokenRequest>,
 ) -> impl IntoResponse {
-    // Validate the refresh token
-    match JwtUtils::validate_refresh_token(&payload.refresh_token) {
-        Ok(claims) => {
-            // Generate new access token and refresh token
-            let new_token = JwtUtils::generate_jwt(claims.sub, &claims.username);
-            let new_refresh_token = JwtUtils::generate_refresh_token(claims.sub, &claims.username);
-
-            match (new_token, new_refresh_token) {
-                (Ok(token), Ok(refresh_token)) => ResponseBuilder::success(
-                    "TOKEN_REFRESHED",
-                    "Token refreshed successfully",
-                    RefreshTokenResponse {
-                        token,
-                        refresh_token: Some(refresh_token),
-                        type_: "Bearer".to_string(),
-                    }
-                ),
-                _ => ResponseBuilder::error::<RefreshTokenResponse>(
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "JWT_ERR",
-                    "Token generation failed"
-                ),
+    match AuthService::refresh_token(&state.db, payload.refresh_token).await {
+        Ok((token, refresh_token)) => ResponseBuilder::success(
+            "TOKEN_REFRESHED",
+            "Token refreshed successfully",
+            RefreshTokenResponse {
+                token,
+                refresh_token: Some(refresh_token),
+                type_: "Bearer".to_string(),
             }
-        },
-        Err(_) => ResponseBuilder::error::<RefreshTokenResponse>(
-            axum::http::StatusCode::UNAUTHORIZED,
-            "INVALID_REFRESH_TOKEN",
-            "Invalid or expired refresh token"
         ),
+        Err((status, code, message)) => ResponseBuilder::error::<RefreshTokenResponse>(status, code, &message),
+    }
+}
+
+// 7. HANDLER LOGOUT
+pub async fn logout_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<RefreshTokenRequest>, 
+) -> impl IntoResponse {
+    match AuthService::logout_user(&state.db, payload.refresh_token).await {
+        Ok(_) => ResponseBuilder::success::<()>(
+            "LOGOUT_SUCCESS",
+            "Successfully logged out",
+            ()
+        ),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
+    }
+}
+
+// 8. HANDLER VERIFY EMAIL
+pub async fn verify_email_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<VerifyEmailRequest>,
+) -> impl IntoResponse {
+    match AuthService::verify_email(&state.db, payload.token).await {
+        Ok(_) => ResponseBuilder::success::<()>(
+            "EMAIL_VERIFIED",
+            "Email verified successfully",
+            ()
+        ),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
+    }
+}
+
+// 9. HANDLER FORGOT PASSWORD
+pub async fn forgot_password_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<ForgotPasswordRequest>,
+) -> impl IntoResponse {
+    match AuthService::request_password_reset(&state, payload.email).await {
+        Ok(_) => ResponseBuilder::success::<()>(
+            "RESET_EMAIL_SENT",
+            "If the email exists, a reset link has been sent",
+            ()
+        ),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
+    }
+}
+
+// 10. HANDLER RESET PASSWORD
+pub async fn reset_password_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<ResetPasswordRequest>,
+) -> impl IntoResponse {
+    match AuthService::reset_password(&state.db, payload.token, payload.new_password).await {
+        Ok(_) => ResponseBuilder::success::<()>(
+            "PASSWORD_RESET_SUCCESS",
+            "Password has been reset successfully",
+            ()
+        ),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
     }
 }

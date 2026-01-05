@@ -73,3 +73,30 @@ pub struct ProfileResponse {
     pub email: String,
     pub roles: Vec<RoleInfo>,
 }
+
+#[derive(Deserialize, Validate)]
+pub struct VerifyEmailRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub token: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ForgotPasswordRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    #[validate(email(message = "Invalid email format"))]
+    pub email: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ResetPasswordRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub token: String,
+
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    #[validate(length(min = 6, message = "Password must be at least 6 characters"))]
+    pub new_password: String,
+}

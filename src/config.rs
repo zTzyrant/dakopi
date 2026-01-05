@@ -25,6 +25,7 @@ pub struct AppState {
     pub email_service: crate::services::email_service::EmailService,
     pub imagekit_service: crate::services::imagekit_service::ImageKitService,
     pub enforcer: crate::auth::SharedEnforcer,
+    pub rate_limiter: std::sync::Arc<crate::middleware::rate_limiter::RateLimiter>,
 }
 
 impl Config {

@@ -16,6 +16,17 @@ pub struct Model {
     #[serde(skip)]
     pub password_hash: String,
 
+    pub email_verified: Option<bool>,
+    pub email_verified_at: Option<DateTimeUtc>,
+    
+    #[serde(skip)]
+    pub two_factor_enabled: Option<bool>,
+    #[serde(skip)]
+    pub two_factor_secret: Option<String>,
+    
+    pub last_login_at: Option<DateTimeUtc>,
+    pub avatar_url: Option<String>,
+
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub deleted_at: Option<DateTimeUtc>,

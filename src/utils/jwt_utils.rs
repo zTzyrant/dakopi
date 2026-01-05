@@ -11,6 +11,7 @@ pub struct RefreshTokenClaims {
     pub username: String,
     pub exp: usize,
     pub iat: usize,
+    pub jti: String,
     pub token_type: String, // To distinguish from access tokens
 }
 
@@ -93,20 +94,25 @@ impl JwtUtils {
     }
 
     /// Generate a refresh JWT token with the provided user ID and username
-    pub fn generate_refresh_token(user_id: Uuid, username: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    /// Returns (token, jti)
+    pub fn generate_refresh_token(user_id: Uuid, username: &str) -> Result<(String, String), jsonwebtoken::errors::Error> {
         let cfg = Config::init();
         // Refresh token expires in 7 days by default
         let refresh_token_expires_in = cfg.jwt_expires_in * 24 * 7; // 7 days in minutes
         let now = Utc::now();
         let expire = now + Duration::minutes(refresh_token_expires_in);
+        let jti = Uuid::now_v7().to_string();
+
         let claims = RefreshTokenClaims {
             sub: user_id,
             username: username.to_string(),
             exp: expire.timestamp() as usize,
             iat: now.timestamp() as usize,
+            jti: jti.clone(),
             token_type: "refresh".to_string(),
         };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
+        let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))?;
+        Ok((token, jti))
     }
 
     /// Validate a refresh JWT token and return the claims

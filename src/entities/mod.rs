@@ -1,3 +1,9 @@
 pub mod user;
 pub mod role;
 pub mod user_role;
+pub mod session;
+pub mod oauth_account;
+pub mod token_blacklist;
+pub mod email_verification_token;
+pub mod password_reset_token;
+pub mod audit_log;
