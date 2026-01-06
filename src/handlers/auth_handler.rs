@@ -10,7 +10,8 @@ use crate::models::auth_model::{
     ResetEmailLimitRequest, ProfileResponse,
     VerifyEmailRequest, ForgotPasswordRequest, ResetPasswordRequest,
     TwoFaConfirmRequest, TwoFaLoginRequest, TwoFaLoginRequiredResponse,
-    TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser
+    TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser,
+    BackupCodesResponse
 };
 use crate::services::auth_service::AuthService;
 use crate::utils::api_response::ResponseBuilder;
@@ -153,19 +154,19 @@ pub async fn setup_2fa_handler(
 pub async fn confirm_2fa_handler(
     State(state): State<AppState>,
     ValidatedJson(payload): ValidatedJson<TwoFaConfirmRequest>,
-) -> impl IntoResponse {
+) -> Response {
     // Simulasi ambil user pertama
     use crate::entities::user::{Entity as User};
     use sea_orm::{EntityTrait, QueryOrder};
 
     let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
         Ok(Some(u)) => u,
-        _ => return ResponseBuilder::error::<()>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found"),
+        _ => return ResponseBuilder::error::<()>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found").into_response(),
     };
 
     match AuthService::enable_2fa(&state.db, user.public_id, payload.secret, payload.code).await {
-        Ok(_) => ResponseBuilder::success::<()>("2FA_ENABLED", "Two-factor authentication enabled", ()),
-        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
+        Ok(data) => ResponseBuilder::success("2FA_ENABLED", "Two-factor authentication enabled. Backup codes generated.", data).into_response(),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
     }
 }
 

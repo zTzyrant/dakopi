@@ -17,8 +17,10 @@ use crate::config::Config;
 use crate::repositories::user_repository::UserRepository;
 use crate::config::AppState;
 use crate::entities::{user, role, user_role, session, email_verification_token, password_reset_token};
-use crate::models::auth_model::{ProfileResponse, RoleInfo, TwoFaSetupResponse, SessionResponse};
+use crate::models::auth_model::{ProfileResponse, RoleInfo, TwoFaSetupResponse, SessionResponse, BackupCodesResponse};
 use crate::utils::jwt_utils::JwtUtils;
+use crate::services::audit_service::AuditService;
+use serde_json::{json, Value};
 
 pub struct AuthService;
 
@@ -118,6 +120,22 @@ impl AuthService {
 
         // TODO: Send email asynchronously here (requires background job or fire-and-forget)
 
+        // Audit Log
+        AuditService::log(
+            db,
+            Some(user.id),
+            "register",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            Some(json!({ "email": email })),
+            None, // IP not passed to register_user yet, maybe update signature later
+            None, // UA not passed
+            None,
+            None
+        ).await;
+
         Ok(user)
     }
 
@@ -140,6 +158,20 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HASH_ERR", "Password verification failed".to_string()))?;
 
         if !is_valid {
+            AuditService::log(
+                db,
+                Some(user.id),
+                "login",
+                "session",
+                None,
+                "failure",
+                Some("Invalid password".to_string()),
+                None,
+                ip_address.clone(),
+                user_agent.clone(),
+                None,
+                None
+            ).await;
             return Err((StatusCode::UNAUTHORIZED, "AUTH_FAILED", "Invalid username or password".to_string()));
         }
 
@@ -148,6 +180,21 @@ impl AuthService {
             let temp_token = JwtUtils::generate_2fa_temp_token(user.public_id)
                 .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
             
+            AuditService::log(
+                db,
+                Some(user.id),
+                "login",
+                "session",
+                None,
+                "2fa_required",
+                None,
+                None,
+                ip_address.clone(),
+                user_agent.clone(),
+                None,
+                None
+            ).await;
+
             // Return temp_token and flag that 2FA is required
             return Ok((temp_token, 0, None, None, "2FA_REQUIRED".to_string(), true));
         }
@@ -167,9 +214,9 @@ impl AuthService {
         let session = session::ActiveModel {
             id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
-            refresh_token_jti: Set(jti),
-            user_agent: Set(user_agent),
-            ip_address: Set(ip_address),
+            refresh_token_jti: Set(jti.clone()),
+            user_agent: Set(user_agent.clone()),
+            ip_address: Set(ip_address.clone()),
             last_activity: Set(Utc::now()),
             expires_at: Set(Utc::now() + Duration::days(refresh_days)), 
             created_at: Set(Utc::now()),
@@ -177,8 +224,23 @@ impl AuthService {
             ..Default::default()
         };
 
-        session.insert(db).await
+        let saved_session = session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "login",
+            "session",
+            Some(saved_session.id.to_string()),
+            "success",
+            None,
+            Some(json!({ "remember_me": remember_me })),
+            ip_address,
+            user_agent,
+            None,
+            None
+        ).await;
 
         Ok((token, token_exp, Some(refresh_token), Some(refresh_exp), "Bearer".to_string(), false))
     }
@@ -215,6 +277,7 @@ impl AuthService {
         Ok(TwoFaSetupResponse {
             secret,
             qr_code_url,
+            backup_codes: vec![],
         })
     }
 
@@ -223,7 +286,7 @@ impl AuthService {
         user_id: Uuid,
         secret: String,
         code: String,
-    ) -> Result<(), (StatusCode, &'static str, String)> {
+    ) -> Result<BackupCodesResponse, (StatusCode, &'static str, String)> {
         let user = user::Entity::find()
             .filter(user::Column::PublicId.eq(user_id))
             .one(db)
@@ -251,14 +314,36 @@ impl AuthService {
             return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid verification code".to_string()));
         }
 
+        // Generate Backup Codes
+        let (plain_codes, hashed_codes) = Self::generate_backup_codes();
+
         // Update User
-        let mut user_active: user::ActiveModel = user.into();
+        let mut user_active: user::ActiveModel = user.clone().into();
         user_active.two_factor_enabled = Set(Some(true));
         user_active.two_factor_secret = Set(Some(secret));
+        user_active.backup_codes = Set(Some(json!(hashed_codes)));
+
         user_active.update(db).await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update user 2FA status".to_string()))?;
 
-        Ok(())
+        AuditService::log(
+            db,
+            Some(user.id),
+            "enable_2fa",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
+
+        Ok(BackupCodesResponse {
+            backup_codes: plain_codes,
+        })
     }
 
     pub async fn verify_2fa_login(
@@ -300,7 +385,62 @@ impl AuthService {
         ).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_ERR", "Failed to initialize TOTP".to_string()))?;
 
         if !totp.check_current(&code).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_CHECK_ERR", "Failed to check code".to_string()))? {
-            return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid MFA code".to_string()));
+            // TOTP failed, try backup codes
+            let mut backup_code_used = false;
+            let mut remaining_backup_codes: Vec<String> = Vec::new();
+
+            if let Some(backup_codes_json) = &user.backup_codes {
+                 if let Ok(hashes) = serde_json::from_value::<Vec<String>>(backup_codes_json.clone()) {
+                     for hash in &hashes {
+                         if !backup_code_used {
+                            if let Ok(true) = Self::verify_password(code.clone(), hash) {
+                                backup_code_used = true;
+                                continue; // Skip adding this hash (it's used)
+                            }
+                         }
+                         remaining_backup_codes.push(hash.clone());
+                     }
+                 }
+            }
+
+            if !backup_code_used {
+                AuditService::log(
+                    db,
+                    Some(user.id),
+                    "login_2fa",
+                    "session",
+                    None,
+                    "failure",
+                    Some("Invalid MFA code".to_string()),
+                    None,
+                    ip_address.clone(),
+                    user_agent.clone(),
+                    None,
+                    None
+                ).await;
+                return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid MFA code".to_string()));
+            }
+
+             // Backup code valid, remove it from DB
+            let mut user_active: user::ActiveModel = user.clone().into();
+            user_active.backup_codes = Set(Some(json!(remaining_backup_codes)));
+            user_active.update(db).await
+                 .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update backup codes".to_string()))?;
+
+             AuditService::log(
+                db,
+                Some(user.id),
+                "login_2fa_backup",
+                "session",
+                None,
+                "success",
+                Some("Backup code used".to_string()),
+                None,
+                ip_address.clone(),
+                user_agent.clone(),
+                None,
+                None
+            ).await;
         }
 
         // 4. Generate Final Tokens
@@ -315,9 +455,9 @@ impl AuthService {
         let session = session::ActiveModel {
             id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
-            refresh_token_jti: Set(jti),
-            user_agent: Set(user_agent),
-            ip_address: Set(ip_address),
+            refresh_token_jti: Set(jti.clone()),
+            user_agent: Set(user_agent.clone()),
+            ip_address: Set(ip_address.clone()),
             last_activity: Set(Utc::now()),
             expires_at: Set(Utc::now() + Duration::days(cfg.jwt_refresh_days)),
             created_at: Set(Utc::now()),
@@ -325,8 +465,23 @@ impl AuthService {
             ..Default::default()
         };
 
-        session.insert(db).await
+        let saved_session = session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "login_2fa",
+            "session",
+            Some(saved_session.id.to_string()),
+            "success",
+            None,
+            None,
+            ip_address,
+            user_agent,
+            None,
+            None
+        ).await;
 
         Ok((token, token_exp, Some(refresh_token), Some(refresh_exp), "Bearer".to_string()))
     }
@@ -348,15 +503,44 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HASH_ERR", "Password verification failed".to_string()))?;
 
         if !is_valid {
+            AuditService::log(
+                db,
+                Some(user.id),
+                "disable_2fa",
+                "user",
+                Some(user.public_id.to_string()),
+                "failure",
+                Some("Invalid password".to_string()),
+                None,
+                None,
+                None,
+                None,
+                None
+            ).await;
             return Err((StatusCode::UNAUTHORIZED, "INVALID_PASSWORD", "Invalid password".to_string()));
         }
 
         // Update User
-        let mut user_active: user::ActiveModel = user.into();
+        let mut user_active: user::ActiveModel = user.clone().into();
         user_active.two_factor_enabled = Set(Some(false));
         user_active.two_factor_secret = Set(None);
         user_active.update(db).await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to disable 2FA".to_string()))?;
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "disable_2fa",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
 
         Ok(())
     }
@@ -496,6 +680,9 @@ impl AuthService {
         access_token: String,
         refresh_token: String
     ) -> Result<(), (StatusCode, &'static str, String)> {
+        let mut user_db_id = None;
+        let mut user_public_id = None;
+
         // 1. Blacklist Access Token (Redis)
         if let Ok(token_data) = JwtUtils::validate_jwt(&access_token) {
              let claims = token_data.claims;
@@ -507,6 +694,15 @@ impl AuthService {
                  // We store "revoked" string. RedisService::set serializes it to "\"revoked\"", which is fine.
                  let _ = state.redis_service.set(&key, "revoked", ttl as u64).await;
              }
+             
+             // Try to find user for logging
+             if let Ok(Some(user)) = user::Entity::find()
+                .filter(user::Column::PublicId.eq(claims.sub))
+                .one(&state.db)
+                .await {
+                    user_db_id = Some(user.id);
+                    user_public_id = Some(user.public_id.to_string());
+                }
         }
 
         // 2. Revoke Refresh Token Session (DB)
@@ -519,6 +715,12 @@ impl AuthService {
                     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?;
 
                 if let Some(session) = session {
+                    // If we didn't find user from access token, use session's user_id
+                    if user_db_id.is_none() {
+                        user_db_id = Some(session.user_id);
+                        // We could fetch public_id here if needed, but let's skip for brevity if access token was invalid
+                    }
+
                     let mut session_active: session::ActiveModel = session.into();
                     session_active.revoked_at = Set(Some(Utc::now()));
                     session_active.update(&state.db).await
@@ -526,6 +728,21 @@ impl AuthService {
                 }
              }
         }
+
+        AuditService::log(
+            &state.db,
+            user_db_id,
+            "logout",
+            "session",
+            user_public_id,
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
 
         Ok(())
     }
@@ -556,7 +773,7 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
             .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
 
-        let mut user_active: user::ActiveModel = user.into();
+        let mut user_active: user::ActiveModel = user.clone().into();
         user_active.email_verified = Set(Some(true));
         user_active.email_verified_at = Set(Some(Utc::now()));
         user_active.update(db).await
@@ -567,6 +784,21 @@ impl AuthService {
         token_active.used_at = Set(Some(Utc::now()));
         token_active.update(db).await
              .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update token".to_string()))?;
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "verify_email",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
 
         Ok(())
     }
@@ -598,6 +830,21 @@ impl AuthService {
 
         token_model.insert(db).await
              .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to create reset token".to_string()))?;
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "forgot_password",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
 
         // Send Email (Fire and forget)
         let _email_service = state.email_service.clone();
@@ -642,7 +889,7 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
             .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
 
-        let mut user_active: user::ActiveModel = user.into();
+        let mut user_active: user::ActiveModel = user.clone().into();
         user_active.password_hash = Set(hashed_password);
         user_active.update(db).await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update password".to_string()))?;
@@ -652,6 +899,21 @@ impl AuthService {
         token_active.used_at = Set(Some(Utc::now()));
         token_active.update(db).await
              .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update token".to_string()))?;
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "reset_password",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
 
         Ok(())
     }
@@ -671,7 +933,30 @@ impl AuthService {
         (StatusCode::CONFLICT, code, msg.to_string())
     }
 
-        fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
+    fn generate_backup_codes() -> (Vec<String>, Vec<String>) {
+        use rand::distributions::Alphanumeric;
+        use rand::Rng;
+        
+        let mut plain_codes = Vec::new();
+        let mut hashed_codes = Vec::new();
+        
+        for _ in 0..10 {
+            let code: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(10)
+                .map(char::from)
+                .collect();
+            
+            // Hash with Argon2 (using existing helper)
+            if let Ok(hash) = Self::hash_password(code.clone()) {
+                plain_codes.push(code);
+                hashed_codes.push(hash);
+            }
+        }
+        (plain_codes, hashed_codes)
+    }
+
+    fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
 
             let salt = SaltString::generate(&mut OsRng);
 

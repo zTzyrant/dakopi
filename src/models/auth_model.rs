@@ -104,247 +104,74 @@ pub struct ForgotPasswordRequest {
 }
 
 #[derive(Deserialize, Validate)]
-
 pub struct ResetPasswordRequest {
-
     #[serde(default)]
-
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
     pub token: String,
 
-
-
     #[serde(default)]
-
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
     #[validate(length(min = 6, message = "Password must be at least 6 characters"))]
-
     pub new_password: String,
-
 }
-
-
 
 // --- MFA / 2FA Models ---
 
-
-
 #[derive(Serialize)]
-
 pub struct TwoFaSetupResponse {
-
     pub secret: String,
-
     pub qr_code_url: String, // Data URI base64
-
+    pub backup_codes: Vec<String>,
 }
 
-
-
 #[derive(Deserialize, Validate)]
-
 pub struct TwoFaConfirmRequest {
-
     #[serde(default)]
-
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
     pub code: String,
-
     
-
     #[serde(default)]
-
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
     pub secret: String,
-
 }
 
-
-
 #[derive(Deserialize, Validate)]
-
 pub struct TwoFaLoginRequest {
-
     #[serde(default)]
-
+    // Code is now optional because it could be a backup code passed here? 
+    // Wait, let's keep it required as "code" field can carry TOTP OR Backup Code.
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
     pub code: String,
-
     
-
     #[serde(default)]
-
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
     pub temp_token: String,
-
 }
-
-
 
 #[derive(Serialize)]
-
-
-
 pub struct TwoFaLoginRequiredResponse {
-
-
-
     pub temp_token: String,
-
-
-
 }
-
-
-
-
-
-
 
 #[derive(Deserialize, Validate)]
-
-
-
-
-
-
-
 pub struct TwoFaDisableRequest {
-
-
-
-
-
-
-
     #[serde(default)]
-
-
-
-
-
-
-
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
-
-
-
-
-
-
-
     pub password: String,
-
-
-
-
-
-
-
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[derive(Serialize)]
-
-
-
-
-
-
-
 pub struct SessionResponse {
-
-
-
-
-
-
-
     pub id: Uuid,
-
-
-
-
-
-
-
     pub user_agent: Option<String>,
-
-
-
-
-
-
-
     pub ip_address: Option<String>,
-
-
-
-
-
-
-
     pub device_type: Option<String>, // mobile, desktop, etc.
-
-
-
-
-
-
-
     pub last_activity: chrono::DateTime<chrono::Utc>,
-
-
-
-
-
-
-
     pub created_at: chrono::DateTime<chrono::Utc>,
-
-
-
-
-
-
-
     pub is_current: bool,
-
-
-
-
-
-
-
 }
 
-
-
-
-
-
-
-
-
-
-
-
+#[derive(Serialize)]
+pub struct BackupCodesResponse {
+    pub backup_codes: Vec<String>,
+}

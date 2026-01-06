@@ -23,6 +23,8 @@ pub struct Model {
     pub two_factor_enabled: Option<bool>,
     #[serde(skip)]
     pub two_factor_secret: Option<String>,
+    #[serde(skip)]
+    pub backup_codes: Option<Json>,
     
     pub last_login_at: Option<DateTimeUtc>,
     pub avatar_url: Option<String>,

@@ -29,6 +29,7 @@ casbin = { version = "2.0", default-features = false, features = ["runtime-tokio
 sea-orm-adapter = { version = "0.4.0", features = ["runtime-tokio-rustls", "postgres"] }
 argon2 = "0.5"
 rand_core = "0.6"
+rand = "0.8"
 jsonwebtoken = "9"
 uuid = { version = "1", features = ["v7", "serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }

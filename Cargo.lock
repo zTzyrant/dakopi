@@ -819,6 +819,7 @@ dependencies = [
  "jsonwebtoken",
  "oauth2",
  "qrcode",
+ "rand 0.8.5",
  "rand_core 0.6.4",
  "redis",
  "reqwest 0.12.28",

@@ -62,6 +62,7 @@ impl UserRepository {
             email_verified_at: Set(None),
             two_factor_enabled: Set(Some(false)),
             two_factor_secret: Set(None),
+            backup_codes: Set(None),
             last_login_at: Set(None),
             avatar_url: Set(None),
         };

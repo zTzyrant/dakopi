@@ -3,6 +3,7 @@ pub use sea_orm_migration::prelude::*;
 mod m20220101_000001_create_table;
 mod m20260104_000002_create_roles_and_casbin;
 mod m20260105_000003_create_auth_tables;
+mod m20260106_000004_add_backup_codes;
 
 pub struct Migrator;
 
@@ -13,6 +14,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20220101_000001_create_table::Migration),
             Box::new(m20260104_000002_create_roles_and_casbin::Migration),
             Box::new(m20260105_000003_create_auth_tables::Migration),
+            Box::new(m20260106_000004_add_backup_codes::Migration),
         ]
     }
 }
