@@ -1,7 +1,7 @@
 use crate::config::AppState;
 use crate::utils::api_response::ResponseBuilder;
 use crate::utils::jwt_utils::JwtUtils;
-use crate::models::auth_model::CurrentUser;
+use crate::models::auth_model::{CurrentUser, UserData};
 use crate::entities::{user, user_role, role};
 use axum::{
     body::Body,
@@ -90,9 +90,9 @@ pub async fn rbac_middleware(
 
     // 4. Get User Data (Cache -> DB)
     let user_cache_key = format!("user:{}", user_id);
-    let cached_user: Option<CurrentUser> = state.redis_service.get(&user_cache_key).await;
+    let cached_user: Option<UserData> = state.redis_service.get(&user_cache_key).await;
 
-    let current_user = if let Some(user) = cached_user {
+    let user_data = if let Some(user) = cached_user {
         // Cache Hit
         user
     } else {
@@ -104,6 +104,15 @@ pub async fn rbac_middleware(
         user
     };
     
+    // Construct CurrentUser with Session ID from token
+    let current_user = CurrentUser {
+        id: user_data.id,
+        username: user_data.username,
+        email: user_data.email,
+        roles: user_data.roles,
+        session_id: claims.sid,
+    };
+
     // 5. Inject CurrentUser into request
     req.extensions_mut().insert(current_user.clone());
 
@@ -112,9 +121,6 @@ pub async fn rbac_middleware(
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
     
-    // Check permission for "user" (ID) or "roles"
-    // Usually RBAC checks role-based. Here we check subject = user_id (string)
-    // You might want to check against ROLES in future.
     match enforcer.enforce((&user_id.to_string(), &path, &method)) {
         Ok(true) => Ok(next.run(req).await),
         Ok(false) => {
@@ -141,7 +147,7 @@ pub async fn rbac_middleware(
 async fn fetch_user_from_db(
     db: &sea_orm::DatabaseConnection,
     user_id: uuid::Uuid,
-) -> Result<CurrentUser, StatusCode> {
+) -> Result<UserData, StatusCode> {
     // Fetch User
     let user = user::Entity::find()
         .filter(user::Column::PublicId.eq(user_id))
@@ -162,7 +168,7 @@ async fn fetch_user_from_db(
         .filter_map(|(_ur, r)| r.map(|role| role.name))
         .collect();
 
-    Ok(CurrentUser {
+    Ok(UserData {
         id: user.public_id,
         username: user.username,
         email: user.email,

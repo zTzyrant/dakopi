@@ -19,6 +19,7 @@ pub struct TwoFaTempClaims {
     pub sub: Uuid,
     pub exp: usize,
     pub iat: usize,
+    pub jti: String, // Added JTI for blacklist
     pub token_type: String, 
 }
 
@@ -26,7 +27,7 @@ pub struct JwtUtils;
 
 impl JwtUtils {
     /// Generate Access Token (with JTI for blacklist capability)
-    pub fn generate_jwt(user_id: Uuid) -> Result<(String, usize, String), jsonwebtoken::errors::Error> {
+    pub fn generate_jwt(user_id: Uuid, session_id: Uuid) -> Result<(String, usize, String), jsonwebtoken::errors::Error> {
         let cfg = Config::init();
         let now = Utc::now();
         let expire = now + Duration::minutes(cfg.jwt_access_minutes);
@@ -34,6 +35,7 @@ impl JwtUtils {
         
         let claims = Claims {
             sub: user_id,
+            sid: session_id,
             exp: expire.timestamp() as usize,
             iat: now.timestamp() as usize,
             jti: jti.clone(),
@@ -53,17 +55,21 @@ impl JwtUtils {
     }
 
     /// Generate 2FA Temp Token (5 mins)
-    pub fn generate_2fa_temp_token(user_id: Uuid) -> Result<String, jsonwebtoken::errors::Error> {
+    pub fn generate_2fa_temp_token(user_id: Uuid) -> Result<(String, String), jsonwebtoken::errors::Error> {
         let cfg = Config::init();
         let now = Utc::now();
         let expire = now + Duration::minutes(5); 
+        let jti = Uuid::now_v7().to_string();
+
         let claims = TwoFaTempClaims {
             sub: user_id,
             exp: expire.timestamp() as usize,
             iat: now.timestamp() as usize,
+            jti: jti.clone(),
             token_type: "2fa_temp".to_string(),
         };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))
+        let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()))?;
+        Ok((token, jti))
     }
 
     /// Validate 2FA Temp Token

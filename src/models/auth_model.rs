@@ -54,14 +54,24 @@ pub struct LoginResponse {
 pub struct Claims {
     pub sub: Uuid,      
     // Username removed for minimal payload
+    pub sid: Uuid, // Session ID (to track current session)
     pub exp: usize,     
     pub iat: usize,     
     pub jti: String, // Access Token Unique ID (for blacklist)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserData {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurrentUser {
     pub id: Uuid, // Public ID
+    pub session_id: Uuid, // Current Session ID
     pub username: String,
     pub email: String,
     pub roles: Vec<String>,

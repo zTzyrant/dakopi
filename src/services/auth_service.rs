@@ -20,7 +20,7 @@ use crate::entities::{user, role, user_role, session, email_verification_token, 
 use crate::models::auth_model::{ProfileResponse, RoleInfo, TwoFaSetupResponse, SessionResponse, BackupCodesResponse};
 use crate::utils::jwt_utils::JwtUtils;
 use crate::services::audit_service::AuditService;
-use serde_json::{json, Value};
+use serde_json::json;
 
 pub struct AuthService;
 
@@ -158,50 +158,27 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HASH_ERR", "Password verification failed".to_string()))?;
 
         if !is_valid {
+            // Log Failure
             AuditService::log(
-                db,
-                Some(user.id),
-                "login",
-                "session",
-                None,
-                "failure",
-                Some("Invalid password".to_string()),
-                None,
-                ip_address.clone(),
-                user_agent.clone(),
-                None,
-                None
+                db, Some(user.id), "login", "session", None, "failure",
+                Some("Invalid password".to_string()), None, ip_address.clone(), user_agent.clone(), None, None
             ).await;
             return Err((StatusCode::UNAUTHORIZED, "AUTH_FAILED", "Invalid username or password".to_string()));
         }
 
         // Check if 2FA is enabled
         if user.two_factor_enabled.unwrap_or(false) {
-            let temp_token = JwtUtils::generate_2fa_temp_token(user.public_id)
+            let (temp_token, _) = JwtUtils::generate_2fa_temp_token(user.public_id)
                 .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
             
+            // Log 2FA Required
             AuditService::log(
-                db,
-                Some(user.id),
-                "login",
-                "session",
-                None,
-                "2fa_required",
-                None,
-                None,
-                ip_address.clone(),
-                user_agent.clone(),
-                None,
-                None
+                db, Some(user.id), "login", "session", None, "2fa_required",
+                None, None, ip_address.clone(), user_agent.clone(), None, None
             ).await;
 
-            // Return temp_token and flag that 2FA is required
             return Ok((temp_token, 0, None, None, "2FA_REQUIRED".to_string(), true));
         }
-
-        // Generate Access Token
-        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id)
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
         // Generate Refresh Token
         let cfg = Config::init();
@@ -214,7 +191,7 @@ impl AuthService {
         let session = session::ActiveModel {
             id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
-            refresh_token_jti: Set(jti.clone()),
+            refresh_token_jti: Set(jti),
             user_agent: Set(user_agent.clone()),
             ip_address: Set(ip_address.clone()),
             last_activity: Set(Utc::now()),
@@ -227,19 +204,14 @@ impl AuthService {
         let saved_session = session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
 
+        // Generate Access Token (with Session ID)
+        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id, saved_session.id)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
+
+        // Log Success
         AuditService::log(
-            db,
-            Some(user.id),
-            "login",
-            "session",
-            Some(saved_session.id.to_string()),
-            "success",
-            None,
-            Some(json!({ "remember_me": remember_me })),
-            ip_address,
-            user_agent,
-            None,
-            None
+            db, Some(user.id), "login", "session", Some(saved_session.id.to_string()), "success",
+            None, Some(serde_json::json!({ "remember_me": remember_me })), ip_address, user_agent, None, None
         ).await;
 
         Ok((token, token_exp, Some(refresh_token), Some(refresh_exp), "Bearer".to_string(), false))
@@ -347,7 +319,7 @@ impl AuthService {
     }
 
     pub async fn verify_2fa_login(
-        db: &DatabaseConnection,
+        state: &AppState,
         temp_token: String,
         code: String,
         user_agent: Option<String>,
@@ -357,6 +329,14 @@ impl AuthService {
         let claims = JwtUtils::validate_2fa_temp_token(&temp_token)
             .map_err(|_| (StatusCode::UNAUTHORIZED, "INVALID_TEMP_TOKEN", "Temporary token invalid or expired".to_string()))?;
 
+        // Check if temp token is blacklisted
+        let blacklist_key = format!("blacklist:token:{}", claims.jti);
+        if state.redis_service.exists(&blacklist_key).await {
+             return Err((StatusCode::UNAUTHORIZED, "TOKEN_REVOKED", "Token already used".to_string()));
+        }
+
+        let db = &state.db;
+
         // 2. Find User
         let user = user::Entity::find()
             .filter(user::Column::PublicId.eq(claims.sub))
@@ -365,6 +345,7 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
             .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
 
+        // ... (Secret validation logic is same, keep it via read_file check if possible or copy paste carefully)
         let secret = user.two_factor_secret.as_ref()
             .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "MFA_NOT_CONFIGURED", "MFA is not configured for this user".to_string()))?;
 
@@ -384,69 +365,42 @@ impl AuthService {
             user.email.clone(),
         ).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_ERR", "Failed to initialize TOTP".to_string()))?;
 
-        if !totp.check_current(&code).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_CHECK_ERR", "Failed to check code".to_string()))? {
-            // TOTP failed, try backup codes
-            let mut backup_code_used = false;
-            let mut remaining_backup_codes: Vec<String> = Vec::new();
+        let mut code_valid = totp.check_current(&code).map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TOTP_CHECK_ERR", "Failed to check code".to_string()))?;
 
-            if let Some(backup_codes_json) = &user.backup_codes {
+        if !code_valid {
+             // Backup code logic... (Must include this logic from previous step)
+             let mut backup_code_used = false;
+             let mut remaining_backup_codes: Vec<String> = Vec::new();
+
+             if let Some(backup_codes_json) = &user.backup_codes {
                  if let Ok(hashes) = serde_json::from_value::<Vec<String>>(backup_codes_json.clone()) {
                      for hash in &hashes {
                          if !backup_code_used {
                             if let Ok(true) = Self::verify_password(code.clone(), hash) {
                                 backup_code_used = true;
-                                continue; // Skip adding this hash (it's used)
+                                continue; 
                             }
                          }
                          remaining_backup_codes.push(hash.clone());
                      }
                  }
             }
-
-            if !backup_code_used {
-                AuditService::log(
-                    db,
-                    Some(user.id),
-                    "login_2fa",
-                    "session",
-                    None,
-                    "failure",
-                    Some("Invalid MFA code".to_string()),
-                    None,
-                    ip_address.clone(),
-                    user_agent.clone(),
-                    None,
-                    None
-                ).await;
-                return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid MFA code".to_string()));
+            
+            if backup_code_used {
+                code_valid = true;
+                // Update backup codes
+                let mut user_active: user::ActiveModel = user.clone().into();
+                user_active.backup_codes = Set(Some(json!(remaining_backup_codes)));
+                user_active.update(db).await
+                     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update backup codes".to_string()))?;
             }
+        }
 
-             // Backup code valid, remove it from DB
-            let mut user_active: user::ActiveModel = user.clone().into();
-            user_active.backup_codes = Set(Some(json!(remaining_backup_codes)));
-            user_active.update(db).await
-                 .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to update backup codes".to_string()))?;
-
-             AuditService::log(
-                db,
-                Some(user.id),
-                "login_2fa_backup",
-                "session",
-                None,
-                "success",
-                Some("Backup code used".to_string()),
-                None,
-                ip_address.clone(),
-                user_agent.clone(),
-                None,
-                None
-            ).await;
+        if !code_valid {
+            return Err((StatusCode::BAD_REQUEST, "INVALID_CODE", "Invalid MFA code".to_string()));
         }
 
         // 4. Generate Final Tokens
-        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id)
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
-
         let cfg = Config::init();
         let (refresh_token, jti, refresh_exp) = JwtUtils::generate_refresh_token(user.public_id, cfg.jwt_refresh_days)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Refresh token generation failed".to_string()))?;
@@ -455,9 +409,9 @@ impl AuthService {
         let session = session::ActiveModel {
             id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
-            refresh_token_jti: Set(jti.clone()),
-            user_agent: Set(user_agent.clone()),
-            ip_address: Set(ip_address.clone()),
+            refresh_token_jti: Set(jti),
+            user_agent: Set(user_agent),
+            ip_address: Set(ip_address),
             last_activity: Set(Utc::now()),
             expires_at: Set(Utc::now() + Duration::days(cfg.jwt_refresh_days)),
             created_at: Set(Utc::now()),
@@ -468,20 +422,16 @@ impl AuthService {
         let saved_session = session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
 
-        AuditService::log(
-            db,
-            Some(user.id),
-            "login_2fa",
-            "session",
-            Some(saved_session.id.to_string()),
-            "success",
-            None,
-            None,
-            ip_address,
-            user_agent,
-            None,
-            None
-        ).await;
+        // Generate Access Token with Session ID
+        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id, saved_session.id)
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
+
+        // 6. Blacklist Temp Token
+        let now = Utc::now().timestamp() as usize;
+        if claims.exp > now {
+             let ttl = (claims.exp - now) as u64;
+             let _ = state.redis_service.set(&blacklist_key, "used", ttl).await;
+        }
 
         Ok((token, token_exp, Some(refresh_token), Some(refresh_exp), "Bearer".to_string()))
     }
@@ -548,7 +498,7 @@ impl AuthService {
     pub async fn get_user_sessions(
         db: &DatabaseConnection,
         user_id: Uuid,
-        current_jti: Option<String>,
+        current_session_id: Option<Uuid>,
     ) -> Result<Vec<SessionResponse>, (StatusCode, &'static str, String)> {
         // Find DB ID for user
         let user = user::Entity::find()
@@ -573,7 +523,7 @@ impl AuthService {
             device_type: s.device_type,
             last_activity: s.last_activity,
             created_at: s.created_at,
-            is_current: current_jti.as_ref().map(|jti| jti == &s.refresh_token_jti).unwrap_or(false),
+            is_current: current_session_id.map(|cid| cid == s.id).unwrap_or(false),
         }).collect();
 
         Ok(response)
@@ -653,12 +603,10 @@ impl AuthService {
         
         // 3. Generate New Tokens
         // Access token
-        let (new_access_token, _, _) = JwtUtils::generate_jwt(claims.sub)
+        let (new_access_token, _, _) = JwtUtils::generate_jwt(claims.sub, session.id)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
-        // Refresh token (maintain existing duration/type? For now default 7 days again or same as original config)
-        // Ideally we check if it was "remember me" session, but for now we reset to default or use session duration
-        // Let's use Config default
+        // Refresh token
         let cfg = Config::init();
         let (new_refresh_token, new_jti, _) = JwtUtils::generate_refresh_token(claims.sub, cfg.jwt_refresh_days)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
@@ -715,6 +663,9 @@ impl AuthService {
                     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?;
 
                 if let Some(session) = session {
+                    let user_id = session.user_id; // Capture ID for logging
+                    let session_id = session.id;
+
                     // If we didn't find user from access token, use session's user_id
                     if user_db_id.is_none() {
                         user_db_id = Some(session.user_id);
@@ -725,6 +676,17 @@ impl AuthService {
                     session_active.revoked_at = Set(Some(Utc::now()));
                     session_active.update(&state.db).await
                         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_WRITE_ERR", "Failed to revoke session".to_string()))?;
+                    
+                    // Log Logout
+                    AuditService::log(
+                        &state.db,
+                        Some(user_id),
+                        "logout",
+                        "session",
+                        Some(session_id.to_string()),
+                        "success",
+                        None, None, None, None, None, None
+                    ).await;
                 }
              }
         }

@@ -10,8 +10,7 @@ use crate::models::auth_model::{
     ResetEmailLimitRequest, ProfileResponse,
     VerifyEmailRequest, ForgotPasswordRequest, ResetPasswordRequest,
     TwoFaConfirmRequest, TwoFaLoginRequest, TwoFaLoginRequiredResponse,
-    TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser,
-    BackupCodesResponse
+    TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser
 };
 use crate::services::auth_service::AuthService;
 use crate::utils::api_response::ResponseBuilder;
@@ -25,7 +24,7 @@ pub async fn get_sessions_handler(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
 ) -> Response {
-    match AuthService::get_user_sessions(&state.db, user.id, None).await {
+    match AuthService::get_user_sessions(&state.db, user.id, Some(user.session_id)).await {
         Ok(sessions) => ResponseBuilder::success("SESSIONS_FETCHED", "Active sessions", sessions).into_response(),
         Err((status, code, msg)) => ResponseBuilder::error::<Vec<SessionResponse>>(status, code, &msg).into_response(),
     }
@@ -180,7 +179,7 @@ pub async fn verify_2fa_login_handler(
     let ip_address = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
 
     match AuthService::verify_2fa_login(
-        &state.db,
+        &state,
         payload.temp_token,
         payload.code,
         user_agent,

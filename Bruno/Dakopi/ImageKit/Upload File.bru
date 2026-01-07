@@ -1,0 +1,16 @@
+meta {
+  name: Upload File
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/api/imagekit/upload
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  file: @file()
+  fileName: test.jpg
+}
