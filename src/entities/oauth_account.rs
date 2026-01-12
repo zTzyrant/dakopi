@@ -5,8 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "oauth_accounts")]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
+    #[sea_orm(primary_key)]
+    #[serde(skip_serializing)]
+    pub id: i64,
+    #[sea_orm(unique, index)]
+    pub public_id: Uuid,
+    
     pub user_id: i64,
     pub provider: String,
     pub provider_user_id: String,

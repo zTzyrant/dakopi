@@ -10,12 +10,13 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use casbin::CoreApi;
+use casbin::{CoreApi, RbacApi};
 use jsonwebtoken::errors::ErrorKind;
 use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
 
 pub async fn rbac_middleware(
     State(state): State<AppState>,
+    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
     mut req: Request<Body>,
     next: Next,
 ) -> std::result::Result<Response, StatusCode> {
@@ -117,30 +118,44 @@ pub async fn rbac_middleware(
     req.extensions_mut().insert(current_user.clone());
 
     // 6. Casbin Enforce
-    let enforcer = state.enforcer.read().await;
-    let path = req.uri().path().to_string();
-    let method = req.method().to_string();
-    
-    match enforcer.enforce((&user_id.to_string(), &path, &method)) {
-        Ok(true) => Ok(next.run(req).await),
-        Ok(false) => {
-            tracing::warn!("Access denied for user {} at {} {}", user_id, method, path);
-            Ok(ResponseBuilder::error::<()>(
-                StatusCode::FORBIDDEN,
-                "ACCESS_DENIED",
-                "You do not have permission to access this resource",
-            )
-            .into_response())
+    let authorized = {
+        let enforcer = state.enforcer.write().await;
+        
+        let path = original_uri.path().to_string();
+        let method = req.method().to_string();
+        
+        // Debugging
+        let roles = enforcer.get_implicit_roles_for_user(&user_id.to_string(), None);
+        tracing::info!("DEBUG CASBIN: User {} has roles: {:?}. Checking access for {} {}", user_id, roles, method, path);
+
+        match enforcer.enforce((&user_id.to_string(), &path, &method)) {
+            Ok(true) => true,
+            Ok(false) => {
+                tracing::warn!("Access denied for user {} at {} {}", user_id, method, path);
+                false
+            }
+            Err(e) => {
+                tracing::error!("Casbin enforce error: {}", e);
+                // Return early from the block, authorized becomes unavailable but we return Response
+                return Ok(ResponseBuilder::error::<()>(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
+                    "An internal error occurred during permission check",
+                )
+                .into_response());
+            }
         }
-        Err(e) => {
-            tracing::error!("Casbin enforce error: {}", e);
-            Ok(ResponseBuilder::error::<()>(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "INTERNAL_ERROR",
-                "An internal error occurred during permission check",
-            )
-            .into_response())
-        }
+    };
+
+    if authorized {
+        Ok(next.run(req).await)
+    } else {
+        Ok(ResponseBuilder::error::<()>(
+            StatusCode::FORBIDDEN,
+            "ACCESS_DENIED",
+            "You do not have permission to access this resource",
+        )
+        .into_response())
     }
 }
 

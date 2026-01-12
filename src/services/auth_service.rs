@@ -7,7 +7,7 @@ use argon2::{
 };
 use casbin::{MgmtApi};
 use axum::http::StatusCode;
-use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, ActiveValue::Set, TransactionTrait, ActiveModelTrait};
+use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter, ColumnTrait, ActiveValue::Set, TransactionTrait, ActiveModelTrait, NotSet};
 use uuid::Uuid;
 use chrono::{Utc, Duration};
 use totp_rs::{Algorithm, TOTP, Secret};
@@ -16,8 +16,8 @@ use crate::config::Config;
 
 use crate::repositories::user_repository::UserRepository;
 use crate::config::AppState;
-use crate::entities::{user, role, user_role, session, email_verification_token, password_reset_token};
-use crate::models::auth_model::{ProfileResponse, RoleInfo, TwoFaSetupResponse, SessionResponse, BackupCodesResponse};
+use crate::entities::{user, role, user_role, session, email_verification_token, password_reset_token, oauth_account};
+use crate::models::auth_model::{ProfileResponse, RoleInfo, TwoFaSetupResponse, SessionResponse, BackupCodesResponse, ConnectedAccount};
 use crate::utils::jwt_utils::JwtUtils;
 use crate::services::audit_service::AuditService;
 use serde_json::json;
@@ -36,14 +36,29 @@ impl AuthService {
 
         let (user, roles) = result;
 
+        // Fetch Connected Accounts (OAuth)
+        let oauth_accounts = oauth_account::Entity::find()
+            .filter(oauth_account::Column::UserId.eq(user.id))
+            .all(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error fetching oauth".to_string()))?;
+
+        let connected_accounts = oauth_accounts.into_iter().map(|oa| ConnectedAccount {
+            provider: oa.provider,
+            connected_at: oa.created_at,
+        }).collect();
+
         Ok(ProfileResponse {
             id: user.public_id,
             username: user.username,
             email: user.email,
+            avatar_url: user.avatar_url,
+            two_factor_enabled: user.two_factor_enabled.unwrap_or(false),
             roles: roles.into_iter().map(|r| RoleInfo {
                 id: r.public_id,
                 name: r.name,
             }).collect(),
+            connected_accounts,
         })
     }
 
@@ -103,7 +118,8 @@ impl AuthService {
         // 7. Create Email Verification Token
         let verification_token = Uuid::new_v4().to_string(); // Random token
         let email_token = email_verification_token::ActiveModel {
-            id: Set(Uuid::now_v7()),
+            id: NotSet,
+            public_id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
             token: Set(verification_token),
             email: Set(user.email.clone()),
@@ -189,7 +205,8 @@ impl AuthService {
 
         // Create Session
         let session = session::ActiveModel {
-            id: Set(Uuid::now_v7()),
+            id: NotSet,
+            public_id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
             refresh_token_jti: Set(jti),
             user_agent: Set(user_agent.clone()),
@@ -204,13 +221,13 @@ impl AuthService {
         let saved_session = session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
 
-        // Generate Access Token (with Session ID)
-        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id, saved_session.id)
+        // Generate Access Token (with Session PUBLIC ID)
+        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id, saved_session.public_id)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
         // Log Success
         AuditService::log(
-            db, Some(user.id), "login", "session", Some(saved_session.id.to_string()), "success",
+            db, Some(user.id), "login", "session", Some(saved_session.public_id.to_string()), "success",
             None, Some(serde_json::json!({ "remember_me": remember_me })), ip_address, user_agent, None, None
         ).await;
 
@@ -407,7 +424,8 @@ impl AuthService {
 
         // 5. Create Session
         let session = session::ActiveModel {
-            id: Set(Uuid::now_v7()),
+            id: NotSet,
+            public_id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
             refresh_token_jti: Set(jti),
             user_agent: Set(user_agent),
@@ -422,8 +440,8 @@ impl AuthService {
         let saved_session = session.insert(db).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "SESSION_ERR", format!("Failed to create session: {}", e)))?;
 
-        // Generate Access Token with Session ID
-        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id, saved_session.id)
+        // Generate Access Token with Session PUBLIC ID
+        let (token, token_exp, _) = JwtUtils::generate_jwt(user.public_id, saved_session.public_id)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
         // 6. Blacklist Temp Token
@@ -517,13 +535,13 @@ impl AuthService {
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error finding sessions".to_string()))?;
 
         let response = sessions.into_iter().map(|s| SessionResponse {
-            id: s.id,
+            id: s.public_id,
             user_agent: s.user_agent,
             ip_address: s.ip_address,
             device_type: s.device_type,
             last_activity: s.last_activity,
             created_at: s.created_at,
-            is_current: current_session_id.map(|cid| cid == s.id).unwrap_or(false),
+            is_current: current_session_id.map(|cid| cid == s.public_id).unwrap_or(false),
         }).collect();
 
         Ok(response)
@@ -542,7 +560,8 @@ impl AuthService {
              .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
              .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
 
-        let session = session::Entity::find_by_id(session_id)
+        let session = session::Entity::find()
+            .filter(session::Column::PublicId.eq(session_id))
             .filter(session::Column::UserId.eq(user.id))
             .one(db)
             .await
@@ -603,7 +622,7 @@ impl AuthService {
         
         // 3. Generate New Tokens
         // Access token
-        let (new_access_token, _, _) = JwtUtils::generate_jwt(claims.sub, session.id)
+        let (new_access_token, _, _) = JwtUtils::generate_jwt(claims.sub, session.public_id)
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "JWT_ERR", "Token generation failed".to_string()))?;
 
         // Refresh token
@@ -782,7 +801,8 @@ impl AuthService {
         let expiry = Utc::now() + Duration::minutes(30);
 
         let token_model = password_reset_token::ActiveModel {
-            id: Set(Uuid::now_v7()),
+            id: NotSet,
+            public_id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
             token: Set(reset_token.clone()),
             expires_at: Set(expiry),
@@ -918,7 +938,7 @@ impl AuthService {
         (plain_codes, hashed_codes)
     }
 
-    fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
+    pub fn hash_password(password: String) -> Result<String, argon2::password_hash::Error> {
 
             let salt = SaltString::generate(&mut OsRng);
 

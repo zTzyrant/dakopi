@@ -1,0 +1,16 @@
+meta {
+  name: GitHub Login
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/api/auth/oauth/github
+  body: none
+  auth: none
+}
+
+docs {
+  Returns a JSON containing the GitHub OAuth redirect URL.
+  Open this URL in a browser to initiate the login flow.
+}

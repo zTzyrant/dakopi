@@ -91,11 +91,20 @@ pub struct RoleInfo {
 }
 
 #[derive(Serialize)]
+pub struct ConnectedAccount {
+    pub provider: String,
+    pub connected_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize)]
 pub struct ProfileResponse {
     pub id: Uuid,
     pub username: String,
     pub email: String,
+    pub avatar_url: Option<String>,
+    pub two_factor_enabled: bool,
     pub roles: Vec<RoleInfo>,
+    pub connected_accounts: Vec<ConnectedAccount>,
 }
 
 #[derive(Deserialize, Validate)]

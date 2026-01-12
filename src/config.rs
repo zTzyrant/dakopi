@@ -18,6 +18,12 @@ pub struct Config {
     pub imagekit_private_key: String,
     pub imagekit_public_key: String,
     pub imagekit_url_endpoint: String,
+    pub google_client_id: String,
+    pub google_client_secret: String,
+    pub google_redirect_url: String,
+    pub github_client_id: String,
+    pub github_client_secret: String,
+    pub github_redirect_url: String,
 }
 
 #[derive(Clone, axum::extract::FromRef)]
@@ -66,6 +72,14 @@ impl Config {
         let imagekit_public_key = env::var("IMAGEKIT_PUBLIC_KEY").expect("IMAGEKIT_PUBLIC_KEY must be set");
         let imagekit_url_endpoint = env::var("IMAGEKIT_URL_ENDPOINT").expect("IMAGEKIT_URL_ENDPOINT must be set");
 
+        let google_client_id = env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
+        let google_client_secret = env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
+        let google_redirect_url = env::var("GOOGLE_REDIRECT_URL").unwrap_or_default();
+
+        let github_client_id = env::var("GITHUB_CLIENT_ID").unwrap_or_default();
+        let github_client_secret = env::var("GITHUB_CLIENT_SECRET").unwrap_or_default();
+        let github_redirect_url = env::var("GITHUB_REDIRECT_URL").unwrap_or_default();
+
         Config {
             server_host,
             server_port,
@@ -81,6 +95,12 @@ impl Config {
             imagekit_private_key,
             imagekit_public_key,
             imagekit_url_endpoint,
+            google_client_id,
+            google_client_secret,
+            google_redirect_url,
+            github_client_id,
+            github_client_secret,
+            github_redirect_url,
         }
     }
 }

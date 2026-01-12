@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Extension, Path},
+    extract::{State, Extension, Path, Query},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ use crate::models::auth_model::{
     TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser
 };
 use crate::services::auth_service::AuthService;
+use crate::services::oauth_service::OAuthService;
 use crate::utils::api_response::ResponseBuilder;
 use crate::utils::validated_wrapper::ValidatedJson; 
 
@@ -263,29 +264,11 @@ pub async fn get_roles_handler(
 // 5. HANDLER PROFILE
 pub async fn profile_handler(
     State(state): State<AppState>,
+    Extension(current_user): Extension<CurrentUser>,
 ) -> impl IntoResponse {
-    // TODO: Nantinya ambil ID dari JWT Extension. 
-    // Untuk simulasi testing, kita coba ambil user pertama yang ada di DB.
-    use crate::entities::user::{Entity as User};
-    use sea_orm::{EntityTrait, QueryOrder};
-
-    let first_user = User::find()
-        .order_by_asc(crate::entities::user::Column::Id)
-        .one(&state.db)
-        .await
-        .ok();
-
-    if let Some(Some(u)) = first_user {
-        match AuthService::get_profile(&state.db, u.public_id).await {
-            Ok(profile) => ResponseBuilder::success("PROFILE_FETCHED", "Success", profile),
-            Err((status, code, msg)) => ResponseBuilder::error::<ProfileResponse>(status, code, &msg),
-        }
-    } else {
-        ResponseBuilder::error::<ProfileResponse>(
-            axum::http::StatusCode::NOT_FOUND,
-            "USER_NOT_FOUND",
-            "No user found in database"
-        )
+    match AuthService::get_profile(&state.db, current_user.id).await {
+        Ok(profile) => ResponseBuilder::success("PROFILE_FETCHED", "Success", profile),
+        Err((status, code, msg)) => ResponseBuilder::error::<ProfileResponse>(status, code, &msg),
     }
 }
 
@@ -390,3 +373,56 @@ pub async fn reset_password_handler(
         Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
     }
 }
+        
+        // 11. OAUTH HANDLERS
+        
+        #[derive(Deserialize)]
+        pub struct OAuthCallbackParams {
+            pub code: String,
+            pub _state: Option<String>,
+        }
+        
+        pub async fn get_oauth_url_handler(
+            Path(provider): Path<String>,
+        ) -> impl IntoResponse {
+            match OAuthService::get_authorization_url(&provider) {
+                Ok(url) => ResponseBuilder::success(
+                    "OAUTH_URL_GENERATED",
+                    "Redirect URL generated",
+                    serde_json::json!({ "url": url })
+                ),
+                Err((status, code, msg)) => ResponseBuilder::error::<serde_json::Value>(status, code, &msg),
+            }
+        }
+        
+        pub async fn oauth_callback_handler(
+            State(state): State<AppState>,
+            headers: axum::http::HeaderMap,
+            Path(provider): Path<String>,
+            Query(params): Query<OAuthCallbackParams>,
+        ) -> impl IntoResponse {
+            let user_agent = headers.get("user-agent").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+            let ip_address = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+        
+            match OAuthService::verify_and_link(
+                &state,
+                &provider,
+                params.code,
+                ip_address,
+                user_agent
+            ).await {
+                Ok((token, token_exp, refresh_token, refresh_exp, type_)) => ResponseBuilder::success(
+                    "AUTH_LOGIN_SUCCESS",
+                    "Login successful via OAuth",
+                    LoginResponse { 
+                        token, 
+                        token_expires_at: token_exp,
+                        refresh_token, 
+                        refresh_token_expires_at: refresh_exp,
+                        type_ 
+                    }
+                ),
+                Err((status, code, message)) => ResponseBuilder::error::<LoginResponse>(status, code, &message),
+            }
+        }
+        

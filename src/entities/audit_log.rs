@@ -5,8 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "audit_logs")]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub id: Uuid,
+    #[sea_orm(primary_key)]
+    #[serde(skip_serializing)]
+    pub id: i64,
+    #[sea_orm(unique, index)]
+    pub public_id: Uuid,
+    
     pub user_id: Option<i64>,
     pub action: String,
     pub resource: String,
@@ -19,7 +23,6 @@ pub struct Model {
     pub status: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub error_message: Option<String>,
-    // sea_orm::JsonValue maps to JSON/JSONB in DB
     pub metadata: Option<Json>,
     pub created_at: DateTimeUtc,
 }

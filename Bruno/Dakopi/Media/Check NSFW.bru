@@ -1,0 +1,15 @@
+meta {
+  name: Check NSFW (Debug)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/api/media/check-nsfw
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  file: @file()
+}

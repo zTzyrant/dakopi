@@ -1,0 +1,23 @@
+meta {
+  name: Upload Media
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/api/media/upload
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  file: @file()
+}
+
+docs {
+  Upload gambar. 
+  Persyaratan:
+  1. User terverifikasi (email_verified: true) atau Admin.
+  2. Gambar akan otomatis dikonversi ke WebP.
+  3. Cek NSFW diaktifkan (simulasi).
+}

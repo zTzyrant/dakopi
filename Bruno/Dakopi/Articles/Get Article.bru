@@ -1,0 +1,11 @@
+meta {
+  name: Get Article
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/api/articles/{{articles_uuid}}
+  body: none
+  auth: inherit
+}

@@ -12,8 +12,12 @@ pub struct CasbinPolicyRequest {
 }
 
 #[derive(Serialize)]
-pub struct PolicyResponse {
-    pub sub: String,
-    pub obj: String,
-    pub act: String,
+pub struct FullPolicyResponse {
+    pub ptype: String, // p or g
+    pub v0: String,    // sub
+    pub v1: String,    // obj or group
+    pub v2: String,    // act or domain
+    pub v3: Option<String>,
+    pub v4: Option<String>,
+    pub v5: Option<String>,
 }

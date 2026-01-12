@@ -12,7 +12,9 @@ pub fn auth_routes(state: AppState) -> Router<AppState> {
         .route("/verify-email", post(verify_email_handler))
         .route("/password/forgot", post(forgot_password_handler))
         .route("/password/reset", post(reset_password_handler))
-        .route("/2fa/verify-login", post(verify_2fa_login_handler)); // Verify login is public (part of login flow)
+        .route("/2fa/verify-login", post(verify_2fa_login_handler))
+        .route("/oauth/{provider}", get(get_oauth_url_handler))
+        .route("/oauth/{provider}/callback", get(oauth_callback_handler)); // Verify login is public (part of login flow)
 
     let protected_routes = Router::new()
         .route("/logout", post(logout_handler))
