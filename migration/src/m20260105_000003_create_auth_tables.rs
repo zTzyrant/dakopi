@@ -185,12 +185,12 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(AuditLogs::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(TokenBlacklist::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(PasswordResetTokens::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(EmailVerificationTokens::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(OauthAccounts::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Sessions::Table).to_owned()).await?;
+        manager.drop_table(Table::drop().table(AuditLogs::Table).if_exists().to_owned()).await?;
+        manager.drop_table(Table::drop().table(TokenBlacklist::Table).if_exists().to_owned()).await?;
+        manager.drop_table(Table::drop().table(PasswordResetTokens::Table).if_exists().to_owned()).await?;
+        manager.drop_table(Table::drop().table(EmailVerificationTokens::Table).if_exists().to_owned()).await?;
+        manager.drop_table(Table::drop().table(OauthAccounts::Table).if_exists().to_owned()).await?;
+        manager.drop_table(Table::drop().table(Sessions::Table).if_exists().to_owned()).await?;
         
         // Dropping columns is trickier in cross-db standard, usually ignored in 'down' for quick rollbacks or explicitly listed.
         // For now, we leave the user columns or would need separate 'alter table drop column' calls.

@@ -66,6 +66,7 @@ pub struct UserData {
     pub username: String,
     pub email: String,
     pub roles: Vec<String>,
+    pub email_verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +113,14 @@ pub struct VerifyEmailRequest {
     #[serde(default)]
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
     pub token: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ResendVerificationRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    #[validate(email(message = "Invalid email format"))]
+    pub email: String,
 }
 
 #[derive(Deserialize, Validate)]

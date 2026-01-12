@@ -37,26 +37,12 @@ pub async fn create_article_handler(
     Extension(user): Extension<CurrentUser>,
     ValidatedJson(payload): ValidatedJson<CreateArticleRequest>,
 ) -> impl IntoResponse {
-    // 1. Check Verification (Using PublicId lookup)
-    let is_verified = if let Ok(Some(u)) = user::Entity::find()
-        .filter(user::Column::PublicId.eq(user.id))
-        .one(&state.db)
-        .await 
-    {
-        u.email_verified.unwrap_or(false)
-    } else {
-        false
-    };
+    // Middleware already enforced verification policies.
+    // We just need to pass context to service.
     
-    let is_admin = user.roles.contains(&"admin".to_string()) || user.roles.contains(&"super".to_string());
-
-    if !is_verified && !is_admin {
-        return ResponseBuilder::error::<()>(
-            StatusCode::FORBIDDEN, 
-            "ACCESS_DENIED", 
-            "You must verify your email to create articles"
-        ).into_response();
-    }
+    // Check if user is admin/super for service-level logic (e.g. status handling)
+    // Ideally this should also be permission-based, but for now checking roles string is okay for internal logic flags
+    let is_admin = user.roles.iter().any(|r| r == "admin" || r == "super");
     
     // Get DB ID (Int) from UUID
     let db_user_id = if let Ok(Some(u)) = user::Entity::find()
@@ -80,7 +66,7 @@ pub async fn update_article_handler(
     Path(id): Path<uuid::Uuid>,
     ValidatedJson(payload): ValidatedJson<UpdateArticleRequest>,
 ) -> impl IntoResponse {
-    let is_admin = user.roles.contains(&"admin".to_string()) || user.roles.contains(&"super".to_string());
+    let is_admin = user.roles.iter().any(|r| r == "admin" || r == "super");
     
     let db_user_id = if let Ok(Some(u)) = user::Entity::find()
         .filter(user::Column::PublicId.eq(user.id))
@@ -108,14 +94,10 @@ pub async fn list_tags_handler(
 
 pub async fn create_tag_handler(
     State(state): State<AppState>,
-    Extension(user): Extension<CurrentUser>,
+    Extension(_user): Extension<CurrentUser>,
     ValidatedJson(payload): ValidatedJson<CreateTagRequest>,
 ) -> impl IntoResponse {
-    let is_admin = user.roles.contains(&"admin".to_string()) || user.roles.contains(&"super".to_string());
-    if !is_admin {
-        return ResponseBuilder::error::<()>(StatusCode::FORBIDDEN, "ACCESS_DENIED", "Only admins can create tags").into_response();
-    }
-
+    // Permission check handled by Casbin Middleware
     match ArticleService::create_tag(&state.db, payload.name).await {
         Ok(res) => ResponseBuilder::created("TAG_CREATED", "Tag created successfully", res).into_response(),
         Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
@@ -127,7 +109,7 @@ pub async fn delete_article_handler(
     Extension(user): Extension<CurrentUser>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
-    let is_admin = user.roles.contains(&"admin".to_string()) || user.roles.contains(&"super".to_string());
+    let is_admin = user.roles.iter().any(|r| r == "admin" || r == "super");
     
     let db_user_id = if let Ok(Some(u)) = user::Entity::find()
         .filter(user::Column::PublicId.eq(user.id))

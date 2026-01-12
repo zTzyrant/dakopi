@@ -8,7 +8,7 @@ use crate::config::AppState;
 use crate::models::auth_model::{
     LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, 
     ResetEmailLimitRequest, ProfileResponse,
-    VerifyEmailRequest, ForgotPasswordRequest, ResetPasswordRequest,
+    VerifyEmailRequest, ResendVerificationRequest, ForgotPasswordRequest, ResetPasswordRequest,
     TwoFaConfirmRequest, TwoFaLoginRequest, TwoFaLoginRequiredResponse,
     TwoFaSetupResponse, TwoFaDisableRequest, SessionResponse, CurrentUser
 };
@@ -63,16 +63,6 @@ pub async fn register_user_handler(
         payload.password
     ).await {
         Ok(user) => {
-            let email_service = state.email_service.clone();
-            let email_to = user.email.clone();
-            let username = user.username.clone();
-            
-            tokio::spawn(async move {
-                if let Err(e) = email_service.send_welcome_email(&email_to, &username).await {
-                    tracing::error!("Gagal mengirim email welcome: {}", e);
-                }
-            });
-
             ResponseBuilder::created(
                 "AUTH_REGISTER_SUCCESS",
                 "User registered successfully",
@@ -338,6 +328,21 @@ pub async fn verify_email_handler(
         Ok(_) => ResponseBuilder::success::<()>(
             "EMAIL_VERIFIED",
             "Email verified successfully",
+            ()
+        ),
+        Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),
+    }
+}
+
+// 8.1 HANDLER RESEND VERIFICATION
+pub async fn resend_verification_email_handler(
+    State(state): State<AppState>,
+    ValidatedJson(payload): ValidatedJson<ResendVerificationRequest>,
+) -> impl IntoResponse {
+    match AuthService::resend_verification_email(&state, payload.email).await {
+        Ok(_) => ResponseBuilder::success::<()>(
+            "VERIFICATION_SENT",
+            "If the email exists and is not verified, a new verification link has been sent",
             ()
         ),
         Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg),

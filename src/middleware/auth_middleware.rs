@@ -110,12 +110,40 @@ pub async fn rbac_middleware(
         id: user_data.id,
         username: user_data.username,
         email: user_data.email,
-        roles: user_data.roles,
+        roles: user_data.roles.clone(), // Clone to avoid move
         session_id: claims.sid,
     };
 
     // 5. Inject CurrentUser into request
     req.extensions_mut().insert(current_user.clone());
+
+    // 5.5 Check Verification Status
+    // Dynamic check: Does this user have permission to bypass verification?
+    let is_privileged = {
+        let enforcer = state.enforcer.read().await;
+        enforcer.enforce((&user_id.to_string(), "account", "bypass_verification")).unwrap_or(false)
+    };
+    
+    if !is_privileged && !user_data.email_verified {
+        let path = original_uri.path();
+        // Routes allowed for unverified users (mostly auth management)
+        let allowed_prefixes = [
+            "/api/auth/profile", 
+            "/api/auth/verify-email", 
+            "/api/auth/logout"
+        ];
+        
+        let is_allowed = allowed_prefixes.iter().any(|p| path.starts_with(p));
+        
+        if !is_allowed {
+             return Ok(ResponseBuilder::error::<()>(
+                StatusCode::FORBIDDEN,
+                "EMAIL_NOT_VERIFIED",
+                "Please verify your email address to access this resource",
+            )
+            .into_response());
+        }
+    }
 
     // 6. Casbin Enforce
     let authorized = {
@@ -188,5 +216,6 @@ async fn fetch_user_from_db(
         username: user.username,
         email: user.email,
         roles,
+        email_verified: user.email_verified.unwrap_or(false),
     })
 }

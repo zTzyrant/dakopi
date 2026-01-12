@@ -102,6 +102,11 @@ impl ArticleService {
         let limit = params.limit.unwrap_or(10);
 
         let mut query = Article::find();
+        
+        if let Some(status_str) = params.status {
+            query = query.filter(article::Column::Status.eq(status_str));
+        }
+
         if let Some(search) = params.search {
             query = query.filter(
                 Condition::any()

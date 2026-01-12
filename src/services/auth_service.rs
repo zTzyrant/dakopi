@@ -121,7 +121,7 @@ impl AuthService {
             id: NotSet,
             public_id: Set(Uuid::now_v7()),
             user_id: Set(user.id),
-            token: Set(verification_token),
+            token: Set(verification_token.clone()),
             email: Set(user.email.clone()),
             expires_at: Set(Utc::now() + Duration::days(1)),
             used_at: Set(None),
@@ -134,7 +134,17 @@ impl AuthService {
         txn.commit().await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "TXN_COMMIT_ERR", "Failed to commit transaction".to_string()))?;
 
-        // TODO: Send email asynchronously here (requires background job or fire-and-forget)
+        // Send email asynchronously
+        let email_service = state.email_service.clone();
+        let email_to = user.email.clone();
+        let username = user.username.clone();
+        let token_for_email = verification_token.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = email_service.send_welcome_email(&email_to, &username, &token_for_email).await {
+                tracing::error!("Failed to send welcome email: {}", e);
+            }
+        });
 
         // Audit Log
         AuditService::log(
@@ -770,6 +780,74 @@ impl AuthService {
             db,
             Some(user.id),
             "verify_email",
+            "user",
+            Some(user.public_id.to_string()),
+            "success",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        ).await;
+
+        Ok(())
+    }
+
+    pub async fn resend_verification_email(
+        state: &AppState,
+        email: String,
+    ) -> Result<(), (StatusCode, &'static str, String)> {
+        let db = &state.db;
+        
+        // 1. Check User
+        let user = user::Entity::find()
+            .filter(user::Column::Email.eq(&email))
+            .one(db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERR", "Database error".to_string()))?
+            .ok_or((StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found".to_string()))?;
+
+        if user.email_verified.unwrap_or(false) {
+            return Err((StatusCode::BAD_REQUEST, "ALREADY_VERIFIED", "Email is already verified".to_string()));
+        }
+
+        // 2. Invalidate Old Tokens (Optional but good practice)
+        // For simplicity, we just create a new one. Multiple valid tokens are fine as long as they work.
+
+        // 3. Create New Token
+        let verification_token = Uuid::new_v4().to_string();
+        let email_token = email_verification_token::ActiveModel {
+            id: NotSet,
+            public_id: Set(Uuid::now_v7()),
+            user_id: Set(user.id),
+            token: Set(verification_token.clone()),
+            email: Set(user.email.clone()),
+            expires_at: Set(Utc::now() + Duration::days(1)),
+            used_at: Set(None),
+            created_at: Set(Utc::now()),
+        };
+
+        email_token.insert(db).await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "VERIFICATION_ERR", "Failed to create verification token".to_string()))?;
+
+        // 4. Send Email
+        let email_service = state.email_service.clone();
+        let email_to = user.email.clone();
+        let username = user.username.clone();
+
+        tokio::spawn(async move {
+            // Note: In a real implementation, you might want a specific method for "resend verification" 
+            // but "send_welcome_email" usually contains the verification link too.
+            if let Err(e) = email_service.send_welcome_email(&email_to, &username, &verification_token).await {
+                tracing::error!("Failed to resend verification email: {}", e);
+            }
+        });
+
+        AuditService::log(
+            db,
+            Some(user.id),
+            "resend_verification",
             "user",
             Some(user.public_id.to_string()),
             "success",

@@ -10,6 +10,7 @@ pub fn auth_routes(state: AppState) -> Router<AppState> {
         .route("/login", post(login_user_handler))
         .route("/refresh", post(refresh_token_handler))
         .route("/verify-email", post(verify_email_handler))
+        .route("/verify-email/resend", post(resend_verification_email_handler))
         .route("/password/forgot", post(forgot_password_handler))
         .route("/password/reset", post(reset_password_handler))
         .route("/2fa/verify-login", post(verify_2fa_login_handler))

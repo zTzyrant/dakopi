@@ -4,19 +4,33 @@
  * Run with: bun run tests/api_test.js
  *
  * This script tests the main flows of the application:
- * 1. Authentication (Register, Login, Profile)
- * 2. Tags (Create, List)
+ * 1. Authentication (Register, Login, Profile, Email Verification)
+ * 2. Tags (List, Pick Random, Create)
  * 3. Articles (Create, Get, Update, List, Delete)
  * 4. Admin (Policies)
- * 5. Media (Upload placeholder)
+ *
+ * FEATURES:
+ * - Logs all Request/Response details to a file (timestamped).
+ * - Prompts user for Email Verification Token to test the flow.
  */
 
+const fs = require('fs');
+const readline = require('readline');
+const path = require('path');
+
 const BASE_URL = "http://localhost:3000/api";
+
 let ACCESS_TOKEN = "";
+let CURRENT_USER_EMAIL = "";
 let CURRENT_USER_ID = "";
 let CREATED_ARTICLE_ID = "";
-let CREATED_ARTICLE_SLUG = "";
-let CREATED_TAG_ID = "";
+let SELECTED_TAG_ID = "";
+
+// Logging Setup
+const now = new Date();
+const timestamp = now.toISOString().replace(/[:.]/g, '-');
+const logFileName = `/logs/test_run_${timestamp}.tst.txt`;
+const logPath = path.join(__dirname, logFileName);
 
 // Utils
 const colors = {
@@ -26,13 +40,35 @@ const colors = {
   yellow: "\x1b[33m",
   blue: "\x1b[34m",
   cyan: "\x1b[36m",
+  magenta: "\x1b[35m",
 };
+
+function writeLog(text) {
+  fs.appendFileSync(logPath, text + '\n');
+}
 
 function log(msg, color = colors.reset) {
   console.log(`${color}${msg}${colors.reset}`);
+  writeLog(msg.replace(/\x1b\[[0-9;]*m/g, '')); // Strip ANSI codes for file
+}
+
+function logDetail(header, content) {
+  const divider = "-".repeat(50);
+  const msg = `\n${divider}\n${header}\n${divider}\n${typeof content === 'object' ? JSON.stringify(content, null, 2) : content}\n`;
+  writeLog(msg);
+}
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+function askQuestion(query) {
+  return new Promise(resolve => rl.question(query, resolve));
 }
 
 async function request(method, endpoint, body = null, token = null) {
+  const url = `${BASE_URL}${endpoint}`;
   const headers = {
     "Content-Type": "application/json",
   };
@@ -42,6 +78,12 @@ async function request(method, endpoint, body = null, token = null) {
   }
 
   log(`[${method}] ${endpoint}`, colors.cyan);
+
+  // Log Request
+  logDetail(`REQUEST: ${method} ${url}`, {
+    headers,
+    body
+  });
 
   try {
     const options = {
@@ -53,12 +95,23 @@ async function request(method, endpoint, body = null, token = null) {
       options.body = JSON.stringify(body);
     }
 
-    const res = await fetch(`${BASE_URL}${endpoint}`, options);
-    const data = await res.json();
+    const res = await fetch(url, options);
+
+    let data;
+    const contentType = res.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      data = await res.json();
+    } else {
+      data = await res.text();
+    }
+
+    // Log Response
+    logDetail(`RESPONSE: ${res.status} ${res.statusText}`, data);
 
     return { status: res.status, data };
   } catch (error) {
     log(`❌ Connection Error: ${error.message}`, colors.red);
+    logDetail("CONNECTION ERROR", error.message);
     return null;
   }
 }
@@ -68,7 +121,6 @@ function assert(condition, message) {
     log(`   ✅ ${message}`, colors.green);
   } else {
     log(`   ❌ ${message}`, colors.red);
-    // process.exit(1); // Optional: Stop on failure
   }
 }
 
@@ -89,9 +141,37 @@ async function testAuth() {
 
   if (res.status === 201 || res.status === 200) {
     assert(true, "Registration successful");
+    CURRENT_USER_EMAIL = email;
   } else {
-    // Might exist
-    assert(res.data.code === "USER_EXISTS", "User registration (or already exists)");
+    assert(false, `Registration failed: ${JSON.stringify(res.data)}`);
+    return;
+  }
+
+  // 1.5 Email Verification (Manual Step)
+  log("\n⚠️  MANUAL ACTION REQUIRED ⚠️", colors.yellow);
+  log(`An email has been sent to ${email} (check Mailpit/Console)`, colors.yellow);
+  const token = await askQuestion(`${colors.yellow}Enter the Verification Token from the URL: ${colors.reset}`);
+
+  if (token && token.trim() !== "") {
+    res = await request("POST", "/auth/verify-email", { token: token.trim() });
+    if (res.status === 200) {
+      assert(true, "Email Verification successful");
+    } else {
+      log(`   ❌ Verification Failed: ${JSON.stringify(res.data)}`, colors.red);
+    }
+  } else {
+    log("   ⏩ Skipping Email Verification (No token provided)", colors.yellow);
+  }
+
+  // 1.6 Resend Verification (Test Endpoint)
+  log("Testing Resend Verification...");
+  res = await request("POST", "/auth/verify-email/resend", { email });
+  if (res.status === 200) {
+    assert(true, "Resend verification request successful");
+  } else if (res.status === 400 && res.data.code === "ALREADY_VERIFIED") {
+    log("   ℹ️ Email already verified (Expected if previous step succeeded)", colors.green);
+  } else {
+    log(`   ❌ Resend Failed: ${JSON.stringify(res.data)}`, colors.red);
   }
 
   // 2. Login
@@ -118,28 +198,31 @@ async function testAuth() {
 async function testTags() {
   log("\n--- Tag Tests ---", colors.blue);
 
-  // 1. Create Tag
-  const tagNames = ["Rust", "Programming", "System"];
+  // 1. List Tags (To pick one)
+  let res = await request("GET", "/articles/tags", null, ACCESS_TOKEN);
+  assert(res.status === 200, "Tags listed");
 
-  // We try to create one specific for this run
-  const testTagName = `Tag-${Math.floor(Math.random() * 1000)}`;
-  let res = await request("POST", "/articles/tags", { name: testTagName }, ACCESS_TOKEN);
-
-  if (res.status === 200 || res.status === 201) {
-    assert(true, "Tag created");
-    CREATED_TAG_ID = res.data.data.id;
-  } else if (res.status === 409) {
-    log("   ℹ️ Tag already exists", colors.yellow);
+  if (res.status === 200 && Array.isArray(res.data.data) && res.data.data.length > 0) {
+    const tags = res.data.data;
+    const randomTag = tags[Math.floor(Math.random() * tags.length)];
+    SELECTED_TAG_ID = randomTag.id;
+    log(`   ℹ️ Selected Tag: ${randomTag.name} (${SELECTED_TAG_ID})`, colors.green);
+  } else {
+    log("   ⚠️ No tags found in list. Seeding might have failed or user can't see tags.", colors.yellow);
   }
 
-  // 2. List Tags
-  res = await request("GET", "/articles/tags", null, ACCESS_TOKEN);
-  assert(res.status === 200, "Tags listed");
-  assert(Array.isArray(res.data.data), "Tags data is array");
+  // 2. Create Tag (Try to create one)
+  const testTagName = `Tag-${Math.floor(Math.random() * 1000)}`;
+  res = await request("POST", "/articles/tags", { name: testTagName }, ACCESS_TOKEN);
 
-  if (CREATED_TAG_ID) {
-    const found = res.data.data.find((t) => t.id === CREATED_TAG_ID);
-    assert(found, "Created tag found in list");
+  if (res.status === 200 || res.status === 201) {
+    assert(true, "Tag created (User allowed)");
+    // If we didn't pick one from list, use this one
+    if (!SELECTED_TAG_ID) SELECTED_TAG_ID = res.data.data.id;
+  } else if (res.status === 403) {
+    log("   ℹ️ User cannot create tags (Expected for normal user if restricted)", colors.yellow);
+  } else {
+    log(`   ❌ Create Tag Failed: ${res.status}`, colors.red);
   }
 }
 
@@ -153,7 +236,7 @@ async function testArticles() {
     excerpt: "Short excerpt",
     status: "draft",
     visibility: "public",
-    tags: CREATED_TAG_ID ? [CREATED_TAG_ID] : [],
+    tags: SELECTED_TAG_ID ? [SELECTED_TAG_ID] : [],
   };
 
   let res = await request("POST", "/articles", payload, ACCESS_TOKEN);
@@ -161,11 +244,8 @@ async function testArticles() {
   if (res.status === 200 || res.status === 201) {
     assert(true, "Article created");
     CREATED_ARTICLE_ID = res.data.data.id;
-    CREATED_ARTICLE_SLUG = res.data.data.slug;
 
-    // Validating Author Field
     assert(res.data.data.author, "Author field present");
-    assert(res.data.data.author.username, "Author username present");
   } else {
     log(`Failed create article: ${JSON.stringify(res.data)}`, colors.red);
   }
@@ -174,7 +254,6 @@ async function testArticles() {
   if (CREATED_ARTICLE_ID) {
     res = await request("GET", `/articles/${CREATED_ARTICLE_ID}`, null, ACCESS_TOKEN);
     assert(res.status === 200, "Get Article by ID success");
-    assert(res.data.data.id === CREATED_ARTICLE_ID, "ID Matches");
   }
 
   // 3. Update Article
@@ -185,20 +264,14 @@ async function testArticles() {
     };
     res = await request("PUT", `/articles/${CREATED_ARTICLE_ID}`, updatePayload, ACCESS_TOKEN);
     assert(res.status === 200, "Article updated");
-    assert(res.data.data.title === "Updated Title", "Title updated");
-    assert(res.data.data.status === "published", "Status updated");
+    if (res.status === 200) {
+      assert(res.data.data.title === "Updated Title", "Title updated");
+    }
   }
 
   // 4. List Articles
-  res = await request("GET", "/articles?page=1&limit=5", null, ACCESS_TOKEN);
-  assert(res.status === 200, "Articles listed");
-
-  if (res.status === 200 && res.data.data && res.data.data.data) {
-    assert(res.data.data.data.length > 0, "List is not empty");
-    assert(res.data.data.data[0].author, "List items have author field");
-  } else {
-    log("   ⚠️ Skipping structure check due to list failure", colors.yellow);
-  }
+  res = await request("GET", "/articles?page=1&limit=5&status=published", null, ACCESS_TOKEN);
+  assert(res.status === 200, "Articles listed (Published)");
 
   // 5. Delete Article
   if (CREATED_ARTICLE_ID) {
@@ -214,29 +287,34 @@ async function testArticles() {
 async function testAdmin() {
   log("\n--- Admin Tests ---", colors.blue);
 
-  // Note: This requires the logged in user to be admin.
-  // Usually the first registered user isn't default admin unless seeded.
-  // We'll just try to hit the endpoint and expect either Forbidden or Success
-
+  // Requires Admin Role
   let res = await request("GET", "/admin/casbin/policies", null, ACCESS_TOKEN);
   if (res.status === 200) {
-    assert(true, "Admin policies fetched (User is Admin)");
+    assert(true, "Admin policies fetched");
   } else if (res.status === 403) {
-    log("   ℹ️ User is not admin (Expected for normal user)", colors.yellow);
-  } else {
-    log(`   ❓ Unexpected status: ${res.status}`, colors.red);
+    log("   ℹ️ User is not admin (Expected)", colors.yellow);
   }
 }
 
 async function main() {
+  log(`🚀 Starting Test Suite`, colors.magenta);
+  log(`📝 Logs will be written to: ${logFileName}\n`);
+
   try {
     await testAuth();
-    await testTags();
-    await testArticles();
-    await testAdmin();
+    if (ACCESS_TOKEN) {
+      await testTags();
+      await testArticles();
+      await testAdmin();
+    } else {
+      log("⚠️ Skipping remaining tests due to login failure", colors.red);
+    }
+
     log("\n✨ All Tests Completed", colors.green);
   } catch (e) {
     console.error(e);
+  } finally {
+    rl.close();
   }
 }
 

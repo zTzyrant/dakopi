@@ -1,6 +1,7 @@
 pub mod role_seeder;
 pub mod casbin_seeder;
 pub mod user_seeder;
+pub mod tag_seeder;
 
 use sea_orm::DatabaseConnection;
 use crate::auth::SharedEnforcer;
@@ -14,6 +15,9 @@ pub async fn run_seeders(db: &DatabaseConnection, enforcer: &SharedEnforcer) -> 
 
     // 3. Seed Super User
     user_seeder::seed_super_user(db, enforcer).await?;
+
+    // 4. Seed Tags
+    tag_seeder::seed_tags(db).await?;
     
     Ok(())
 }

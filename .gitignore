@@ -8,3 +8,5 @@
 migration/target
 
 .vs
+
+tests/logs
