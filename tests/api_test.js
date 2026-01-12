@@ -3,15 +3,12 @@
  *
  * Run with: bun run tests/api_test.js
  *
- * This script tests the main flows of the application:
- * 1. Authentication (Register, Login, Profile, Email Verification)
- * 2. Tags (List, Pick Random, Create)
- * 3. Articles (Create, Get, Update, List, Delete)
- * 4. Admin (Policies)
+ * This script tests the main flows of the application including NEGATIVE CASES.
  *
  * FEATURES:
  * - Logs all Request/Response details to a file (timestamped).
  * - Prompts user for Email Verification Token to test the flow.
+ * - Validates Error Responses.
  */
 
 const fs = require('fs');
@@ -124,7 +121,68 @@ function assert(condition, message) {
   }
 }
 
-// --- Tests ---
+function assertError(res, expectedStatus, expectedCode, message) {
+  if (res.status === expectedStatus && res.data.code === expectedCode) {
+    log(`   ✅ [Negative Case] ${message} - Caught ${expectedCode} (${expectedStatus})`, colors.green);
+  } else {
+    log(`   ❌ [Negative Case] ${message} - Failed. Got ${res.status} / ${res.data?.code}, Expected ${expectedStatus} / ${expectedCode}`, colors.red);
+  }
+}
+
+// --- Negative Tests ---
+
+async function testAuthNegative() {
+  log("\n--- Authentication Negative Tests ---", colors.blue);
+
+  // 1. Register - Bad Email
+  let res = await request("POST", "/auth/register", {
+    username: "baduser",
+    email: "not-an-email",
+    password: "password123"
+  });
+  // Validator error usually returns 422 or 400 with VALIDATION_ERROR
+  assertError(res, 422, "VALIDATION_ERROR", "Register with invalid email format");
+
+  // 2. Register - Password too short
+  res = await request("POST", "/auth/register", {
+    username: "shortpass",
+    email: "short@example.com",
+    password: "123"
+  });
+  assertError(res, 422, "VALIDATION_ERROR", "Register with short password");
+
+  // 3. Login - Wrong Password
+  // Assuming a user that doesn't exist returns AUTH_FAILED too, or we try random
+  res = await request("POST", "/auth/login", {
+    login_id: "nonexistentuser",
+    password: "wrongpassword"
+  });
+  assertError(res, 401, "AUTH_FAILED", "Login with non-existent user");
+}
+
+async function testArticleNegative(token) {
+  log("\n--- Article Negative Tests ---", colors.blue);
+
+  // 1. Create Article - Validation (Title too short)
+  let res = await request("POST", "/articles", {
+    title: "No",
+    content: "Valid content text here...",
+    status: "draft",
+    visibility: "public"
+  }, token);
+  assertError(res, 422, "VALIDATION_ERROR", "Create article with short title");
+
+  // 2. Update Article - Not Found
+  const randomUuid = "00000000-0000-0000-0000-000000000000";
+  res = await request("PUT", `/articles/${randomUuid}`, { title: "Update" }, token);
+  assertError(res, 404, "ARTICLE_NOT_FOUND", "Update non-existent article");
+
+  // 3. Delete Article - Not Found
+  res = await request("DELETE", `/articles/${randomUuid}`, null, token);
+  assertError(res, 404, "ARTICLE_NOT_FOUND", "Delete non-existent article");
+}
+
+// --- Positive Tests ---
 
 async function testAuth() {
   log("\n--- Authentication Tests ---", colors.blue);
@@ -147,12 +205,23 @@ async function testAuth() {
     return;
   }
 
+  // 1.1 Register Duplicate (Negative Case integrated)
+  log("   Testing Duplicate Register...");
+  let dupRes = await request("POST", "/auth/register", { username, email, password });
+  assertError(dupRes, 409, "AUTH_DUPLICATE", "Register duplicate user");
+
+
   // 1.5 Email Verification (Manual Step)
   log("\n⚠️  MANUAL ACTION REQUIRED ⚠️", colors.yellow);
   log(`An email has been sent to ${email} (check Mailpit/Console)`, colors.yellow);
   const token = await askQuestion(`${colors.yellow}Enter the Verification Token from the URL: ${colors.reset}`);
 
   if (token && token.trim() !== "") {
+    // 1.5.1 Negative: Verify with bad token
+    let badVer = await request("POST", "/auth/verify-email", { token: "invalid-token-string" });
+    assertError(badVer, 400, "INVALID_TOKEN", "Verify with invalid token");
+
+    // 1.5.2 Positive Verify
     res = await request("POST", "/auth/verify-email", { token: token.trim() });
     if (res.status === 200) {
       assert(true, "Email Verification successful");
@@ -217,13 +286,16 @@ async function testTags() {
 
   if (res.status === 200 || res.status === 201) {
     assert(true, "Tag created (User allowed)");
-    // If we didn't pick one from list, use this one
     if (!SELECTED_TAG_ID) SELECTED_TAG_ID = res.data.data.id;
   } else if (res.status === 403) {
     log("   ℹ️ User cannot create tags (Expected for normal user if restricted)", colors.yellow);
   } else {
     log(`   ❌ Create Tag Failed: ${res.status}`, colors.red);
   }
+
+  // 3. Negative: Create Empty Tag
+  let badTag = await request("POST", "/articles/tags", { name: "" }, ACCESS_TOKEN);
+  assertError(badTag, 422, "VALIDATION_ERROR", "Create tag with empty name");
 }
 
 async function testArticles() {
@@ -278,9 +350,13 @@ async function testArticles() {
     res = await request("DELETE", `/articles/${CREATED_ARTICLE_ID}`, null, ACCESS_TOKEN);
     assert(res.status === 200, "Article deleted");
 
-    // Verify 404
+    // Verify 404 (Positive check for successful delete = 404 on get)
     res = await request("GET", `/articles/${CREATED_ARTICLE_ID}`, null, ACCESS_TOKEN);
-    assert(res.status === 404, "Article now 404");
+    if (res.status === 404) {
+      assert(true, "Article now 404 (Correctly deleted)");
+    } else {
+      log(`   ❌ Expected 404, got ${res.status}`, colors.red);
+    }
   }
 }
 
@@ -301,8 +377,17 @@ async function main() {
   log(`📝 Logs will be written to: ${logFileName}\n`);
 
   try {
+    // Run Negative Auth Tests First
+    await testAuthNegative();
+
+    // Run Main Flow
     await testAuth();
+
     if (ACCESS_TOKEN) {
+      // Run Article Negative Tests (Now that we have a token)
+      await testArticleNegative(ACCESS_TOKEN);
+
+      // Run Main Features
       await testTags();
       await testArticles();
       await testAdmin();
