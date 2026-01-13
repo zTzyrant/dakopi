@@ -30,6 +30,36 @@ pub async fn seed_casbin_policies(enforcer: &SharedEnforcer) -> Result<(), casbi
         ],
         vec![
             "user".to_string(),
+            "/api/auth/refresh".to_string(),
+            "POST".to_string(),
+        ],
+        vec![
+            "user".to_string(),
+            "/api/auth/logout".to_string(),
+            "POST".to_string(),
+        ],
+        vec![
+            "user".to_string(),
+            "/api/auth/2fa/setup".to_string(),
+            "POST".to_string(),
+        ],
+        vec![
+            "user".to_string(),
+            "/api/auth/2fa/confirm".to_string(),
+            "POST".to_string(),
+        ],
+        vec![
+            "user".to_string(),
+            "/api/auth/2fa/verify-login".to_string(),
+            "POST".to_string(),
+        ],
+        vec![
+            "user".to_string(),
+            "/api/auth/2fa/disable".to_string(),
+            "POST".to_string(),
+        ],
+        vec![
+            "user".to_string(),
             "/api/articles".to_string(),
             "GET".to_string(),
         ], // List Articles

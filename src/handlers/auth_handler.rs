@@ -123,18 +123,9 @@ pub async fn login_user_handler(
 // 2.1 HANDLER SETUP 2FA
 pub async fn setup_2fa_handler(
     State(state): State<AppState>,
-    // TODO: Ambil user_id dari JWT middleware nantinya
+    Extension(user): Extension<CurrentUser>,
 ) -> Response {
-    // Simulasi ambil user pertama sementara middleware auth belum terpasang sempurna di handler ini
-    use crate::entities::user::{Entity as User};
-    use sea_orm::{EntityTrait, QueryOrder};
-
-    let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
-        Ok(Some(u)) => u,
-        _ => return ResponseBuilder::error::<TwoFaSetupResponse>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found").into_response(),
-    };
-
-    match AuthService::generate_2fa_setup(&state.db, user.public_id).await {
+    match AuthService::generate_2fa_setup(&state.db, user.id).await {
         Ok(data) => ResponseBuilder::success("2FA_SETUP_READY", "Scan this QR code", data).into_response(),
         Err((status, code, msg)) => ResponseBuilder::error::<TwoFaSetupResponse>(status, code, &msg).into_response(),
     }
@@ -143,18 +134,10 @@ pub async fn setup_2fa_handler(
 // 2.2 HANDLER CONFIRM 2FA
 pub async fn confirm_2fa_handler(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     ValidatedJson(payload): ValidatedJson<TwoFaConfirmRequest>,
 ) -> Response {
-    // Simulasi ambil user pertama
-    use crate::entities::user::{Entity as User};
-    use sea_orm::{EntityTrait, QueryOrder};
-
-    let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
-        Ok(Some(u)) => u,
-        _ => return ResponseBuilder::error::<()>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found").into_response(),
-    };
-
-    match AuthService::enable_2fa(&state.db, user.public_id, payload.secret, payload.code).await {
+    match AuthService::enable_2fa(&state.db, user.id, payload.secret, payload.code).await {
         Ok(data) => ResponseBuilder::success("2FA_ENABLED", "Two-factor authentication enabled. Backup codes generated.", data).into_response(),
         Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
     }
@@ -194,18 +177,10 @@ pub async fn verify_2fa_login_handler(
 // 2.4 HANDLER DISABLE 2FA
 pub async fn disable_2fa_handler(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     ValidatedJson(payload): ValidatedJson<TwoFaDisableRequest>,
 ) -> Response {
-    // Simulasi ambil user pertama
-    use crate::entities::user::{Entity as User};
-    use sea_orm::{EntityTrait, QueryOrder};
-
-    let user = match User::find().order_by_asc(crate::entities::user::Column::Id).one(&state.db).await {
-        Ok(Some(u)) => u,
-        _ => return ResponseBuilder::error::<()>(axum::http::StatusCode::NOT_FOUND, "USER_NOT_FOUND", "User not found").into_response(),
-    };
-
-    match AuthService::disable_2fa(&state.db, user.public_id, payload.password).await {
+    match AuthService::disable_2fa(&state.db, user.id, payload.password).await {
         Ok(_) => ResponseBuilder::success::<()>("2FA_DISABLED", "Two-factor authentication disabled", ()).into_response(),
         Err((status, code, msg)) => ResponseBuilder::error::<()>(status, code, &msg).into_response(),
     }
