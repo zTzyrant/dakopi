@@ -1,0 +1,19 @@
+steps:
+  deploy-production:
+    image: docker:git
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PROD_ENV_CONTENT:
+          from_secret: production_env_file
+    commands:
+      - echo "$PROD_ENV_CONTENT" > .env
+      - docker build -t dakopi:latest .
+      - docker rm -f dakopi-server || true
+      - docker run -d \
+        --name dakopi-server \
+        --restart always \
+        --network host \
+        --env-file .env \
+        dakopi:latest
+      - rm .env
