@@ -4,8 +4,8 @@ steps:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - PROD_ENV_CONTENT:
-          from_secret: production_env_file
+      PROD_ENV_CONTENT:
+        from_secret: production_env_file
     when:
       branch: master
       event: push
