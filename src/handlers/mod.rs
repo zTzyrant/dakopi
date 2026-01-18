@@ -1,5 +1,6 @@
 pub mod auth_handler;
 pub mod admin_handler;
+pub mod imagekit_handler;
 
 use axum::response::IntoResponse;
 use chrono::{Utc, FixedOffset};

@@ -1,3 +1,11 @@
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
 vars:pre-request {
   base_url: 0.0.0.0:3000
 }

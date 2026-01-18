@@ -8,6 +8,7 @@ mod utils;
 mod models;
 mod seeders;
 mod auth;
+mod middleware;
 
 use config::{Config, AppState};
 use dotenvy::dotenv;
@@ -59,17 +60,19 @@ async fn main() {
 
     // 5. Setup Services
     let email_service = crate::services::email_service::EmailService::new(&cfg, redis_service.clone());
+    let imagekit_service = crate::services::imagekit_service::ImageKitService::new(cfg.clone());
 
     // 6. Build App State
     let state = AppState {
         db,
         redis_service,
         email_service,
+        imagekit_service,
         enforcer,
     };
 
     // 7. Initialize Router
-    let app = routes::create_routes().with_state(state);
+    let app = routes::create_routes(state.clone()).with_state(state);
 
     // 8. Start Server
     let addr_str = format!("{}:{}", cfg.server_host, cfg.server_port);
