@@ -1,28 +1,39 @@
-pub mod auth_route; 
-pub mod admin_route;
-pub mod imagekit_route;
-
 use crate::config::AppState;
-use axum::{routing::get, Router};
-use auth_route::auth_routes;
-use admin_route::admin_routes;
-use imagekit_route::imagekit_routes;
-use crate::handlers::health_check_handler;
-use crate::utils::api_response::ResponseBuilder;
+use axum::http::Method;
+use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
 
-// Ini fungsi utama yang dipanggil di main.rs
+pub mod admin_route;
+pub mod article_route;
+pub mod auth_route;
+pub mod media_route;
+pub mod s3_route;
+
 pub fn create_routes(state: AppState) -> Router<AppState> {
-  let api_routes = Router::new()
-    .route("/health", get(health_check_handler))
-    .nest("/auth", auth_routes())
-    .nest("/admin", admin_routes(state))
-    .nest("/imagekit", imagekit_routes());
+    let cors = CorsLayer::new()
+        // Allow `GET`, `POST`, `OPTIONS`, `PUT`, `DELETE` methods
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::OPTIONS,
+            Method::PUT,
+            Method::DELETE,
+        ])
+        // Allow requests from any origin
+        .allow_origin(Any)
+        // Allow any headers
+        .allow_headers(Any);
 
-  Router::new()
-  .route("/", 
-    get(|| async { 
-      ResponseBuilder::success("SUCCESS", "Welcome to Dakopi API", "")
-    })
-  )
-  .nest("/api", api_routes)
+    Router::new()
+        .nest("/api/auth", auth_route::auth_routes(state.clone()))
+        .nest("/api/admin", admin_route::admin_routes(state.clone()))
+        .nest(
+            "/api/articles",
+            article_route::article_routes(state.clone()),
+        )
+        .nest("/api/media", media_route::media_routes(state.clone()))
+        .nest("/api/s3", s3_route::s3_routes(state.clone()))
+        // Health check
+        .route("/api/health", axum::routing::get(|| async { "OK" }))
+        .layer(cors)
 }

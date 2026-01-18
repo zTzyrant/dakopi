@@ -50,4 +50,13 @@ impl RedisService {
             None => None,
         }
     }
+
+    /// Check if key exists
+    pub async fn exists(&self, key: &str) -> bool {
+        let mut con = match self.client.get_multiplexed_async_connection().await {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        con.exists(key).await.unwrap_or(false)
+    }
 }

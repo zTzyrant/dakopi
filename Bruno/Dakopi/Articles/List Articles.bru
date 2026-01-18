@@ -1,0 +1,18 @@
+meta {
+  name: List Articles
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/api/articles?page=1&limit=10
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  limit: 10
+  ~status: published
+  ~search: 
+}

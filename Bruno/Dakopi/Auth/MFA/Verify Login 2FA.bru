@@ -1,0 +1,29 @@
+meta {
+  name: Verify Login 2FA
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/api/auth/2fa/verify-login
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "temp_token": "{{temp_token}}",
+    "code": "671503"
+  }
+  
+}
+
+script:post-response {
+  if(res.body.data.token){
+    bru.setVar("token", res.body.data.token)
+  }
+  
+  if(res.body.data.refresh_token) {
+    bru.setVar("refresh_token", res.body.data.refresh_token)
+  }
+}

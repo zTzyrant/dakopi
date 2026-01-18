@@ -1,0 +1,16 @@
+meta {
+  name: List Media
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/api/media?page=1&limit=10
+  body: none
+  auth: inherit
+}
+
+params:query {
+  page: 1
+  limit: 10
+}

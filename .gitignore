@@ -8,3 +8,6 @@
 migration/target
 
 .vs
+
+tests/logs
+credentials.json 

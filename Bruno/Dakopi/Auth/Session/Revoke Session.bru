@@ -1,0 +1,11 @@
+meta {
+  name: Revoke Specific Session
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{base_url}}/api/auth/sessions/SESSION_ID_HERE
+  body: none
+  auth: inherit
+}

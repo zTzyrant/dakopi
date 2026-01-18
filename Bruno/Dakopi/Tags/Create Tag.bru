@@ -1,0 +1,22 @@
+meta {
+  name: Create Tag
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/api/articles/tags
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "SYSTEM"
+  }
+}
+
+docs {
+  Hanya dapat dilakukan oleh Admin/Superadmin.
+  Tag yang dibuat di sini akan muncul di List Tags dan UUID-nya bisa dipakai saat membuat Artikel.
+}

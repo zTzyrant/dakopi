@@ -60,15 +60,20 @@ async fn main() {
 
     // 5. Setup Services
     let email_service = crate::services::email_service::EmailService::new(&cfg, redis_service.clone());
-    let imagekit_service = crate::services::imagekit_service::ImageKitService::new(cfg.clone());
+    let s3_service = crate::services::s3_service::S3Service::new(cfg.clone()).await;
 
     // 6. Build App State
+    let rate_limiter = std::sync::Arc::new(
+        middleware::rate_limiter::RateLimiter::new(100, std::time::Duration::from_secs(60))
+    );
+
     let state = AppState {
         db,
         redis_service,
         email_service,
-        imagekit_service,
+        s3_service,
         enforcer,
+        rate_limiter,
     };
 
     // 7. Initialize Router

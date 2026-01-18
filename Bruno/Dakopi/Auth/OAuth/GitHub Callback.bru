@@ -1,0 +1,29 @@
+meta {
+  name: GitHub Callback (Manual)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{base_url}}/api/auth/oauth/github/callback
+  body: none
+  auth: none
+}
+
+script:post-response {
+  if(res.body.data.token){
+    bru.setVar("token", res.body.data.token)
+  }
+  
+  if(res.body.data.refresh_token) {
+    bru.setVar("refresh_token", res.body.data.refresh_token)
+  }
+  
+}
+
+docs {
+  This endpoint is usually called by the browser redirect.
+  For manual testing:
+  1. Copy the 'code' parameter from the URL after GitHub redirects you back.
+  2. Paste it into the 'code' query param here.
+}

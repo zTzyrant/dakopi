@@ -1,0 +1,18 @@
+meta {
+  name: Update Article
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{base_url}}/api/articles/ARTICLE_ID
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "title": "Judul Artikel Terupdate",
+    "status": "published"
+  }
+}

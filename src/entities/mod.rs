@@ -1,3 +1,13 @@
-pub mod user;
+pub mod audit_log;
+pub mod email_verification_token;
+pub mod oauth_account;
+pub mod password_reset_token;
 pub mod role;
+pub mod session;
+pub mod token_blacklist;
+pub mod user;
 pub mod user_role;
+pub mod media;
+pub mod article;
+pub mod tag;
+pub mod article_tag;

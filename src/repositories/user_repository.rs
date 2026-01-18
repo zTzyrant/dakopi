@@ -58,6 +58,13 @@ impl UserRepository {
             created_by: Set(None),
             updated_by: Set(None),
             deleted_by: Set(None),
+            email_verified: Set(Some(false)),
+            email_verified_at: Set(None),
+            two_factor_enabled: Set(Some(false)),
+            two_factor_secret: Set(None),
+            backup_codes: Set(None),
+            last_login_at: Set(None),
+            avatar_url: Set(None),
         };
 
         new_user.insert(db).await

@@ -36,21 +36,46 @@ pub struct LoginRequest {
     #[serde(default)]
     #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
     pub password: String,
+
+    #[serde(default)]
+    pub remember_me: bool,
 }
 
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub token: String,
+    pub token_expires_at: usize,
     pub refresh_token: Option<String>,
+    pub refresh_token_expires_at: Option<usize>,
     pub type_: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: Uuid,      
-    pub username: String,
+    // Username removed for minimal payload
+    pub sid: Uuid, // Session ID (to track current session)
     pub exp: usize,     
     pub iat: usize,     
+    pub jti: String, // Access Token Unique ID (for blacklist)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserData {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub roles: Vec<String>,
+    pub email_verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrentUser {
+    pub id: Uuid, // Public ID
+    pub session_id: Uuid, // Current Session ID
+    pub username: String,
+    pub email: String,
+    pub roles: Vec<String>,
 }
 
 #[derive(Deserialize, Validate)]
@@ -67,9 +92,114 @@ pub struct RoleInfo {
 }
 
 #[derive(Serialize)]
+pub struct ConnectedAccount {
+    pub provider: String,
+    pub connected_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Serialize)]
 pub struct ProfileResponse {
     pub id: Uuid,
     pub username: String,
     pub email: String,
+    pub avatar_url: Option<String>,
+    pub two_factor_enabled: bool,
     pub roles: Vec<RoleInfo>,
+    pub connected_accounts: Vec<ConnectedAccount>,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct VerifyEmailRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub token: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ResendVerificationRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    #[validate(email(message = "Invalid email format"))]
+    pub email: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ForgotPasswordRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    #[validate(email(message = "Invalid email format"))]
+    pub email: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct ResetPasswordRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub token: String,
+
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    #[validate(length(min = 6, message = "Password must be at least 6 characters"))]
+    pub new_password: String,
+}
+
+// --- MFA / 2FA Models ---
+
+#[derive(Serialize)]
+pub struct TwoFaSetupResponse {
+    pub secret: String,
+    pub qr_code_url: String, // Data URI base64
+    pub backup_codes: Vec<String>,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct TwoFaConfirmRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub code: String,
+    
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub secret: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct TwoFaLoginRequest {
+    #[serde(default)]
+    // Code is now optional because it could be a backup code passed here? 
+    // Wait, let's keep it required as "code" field can carry TOTP OR Backup Code.
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub code: String,
+    
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub temp_token: String,
+}
+
+#[derive(Serialize)]
+pub struct TwoFaLoginRequiredResponse {
+    pub temp_token: String,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct TwoFaDisableRequest {
+    #[serde(default)]
+    #[validate(custom(function = "crate::utils::validator_utils::validate_required"))]
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct SessionResponse {
+    pub id: Uuid,
+    pub user_agent: Option<String>,
+    pub ip_address: Option<String>,
+    pub device_type: Option<String>, // mobile, desktop, etc.
+    pub last_activity: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub is_current: bool,
+}
+
+#[derive(Serialize)]
+pub struct BackupCodesResponse {
+    pub backup_codes: Vec<String>,
 }

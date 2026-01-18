@@ -34,7 +34,7 @@ where
             let error_list = map_validation_errors(e);
 
             return Err(ResponseBuilder::fail_with_data(
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
                 "VALIDATION_ERROR",
                 "Validation failed",
                 error_list,

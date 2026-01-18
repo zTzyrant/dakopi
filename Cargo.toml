@@ -29,15 +29,27 @@ casbin = { version = "2.0", default-features = false, features = ["runtime-tokio
 sea-orm-adapter = { version = "0.4.0", features = ["runtime-tokio-rustls", "postgres"] }
 argon2 = "0.5"
 rand_core = "0.6"
+rand = "0.8"
 jsonwebtoken = "9"
 uuid = { version = "1", features = ["v7", "serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
+email_address = "0.2"
+oauth2 = "4"
+totp-rs = { version = "5", features = ["qr"] }
+qrcode = "0.14"
+slug = "0.1"
+image = "0.24" 
+tract-onnx = "0.21.7"
 
-# HTTP Client
+# HTTP
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
 
 # Redis
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp"] }
+base64 = "0.22.1"
+aws-config = "1.8.12"
+aws-sdk-s3 = "1.120.0"
 
 [profile.dev]
 debug = 0

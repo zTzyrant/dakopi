@@ -8,6 +8,7 @@ pub fn admin_routes(state: AppState) -> Router<AppState> {
             .route("/policies", get(list_policies_handler))
             .route("/policy", post(add_policy_handler))
             .route("/policy", delete(remove_policy_handler))
+            .route("/cleanup", post(cleanup_policies_handler))
         )
         .layer(axum::middleware::from_fn_with_state(
             state,

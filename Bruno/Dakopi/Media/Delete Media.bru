@@ -1,0 +1,16 @@
+meta {
+  name: Delete Media
+  type: http
+  seq: 2
+}
+
+delete {
+  url: {{base_url}}/api/media/MEDIA_ID
+  body: none
+  auth: inherit
+}
+
+docs {
+  Menghapus record media dari database.
+  Hanya dapat dilakukan oleh Admin/Superadmin.
+}

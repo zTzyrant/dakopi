@@ -1,0 +1,23 @@
+meta {
+  name: Get Presigned URL
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/api/s3/presigned
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "file_name": "019bcd44-bce7-74c0-a108-a5efae9be091-Screenshot 2026-01-14 at 07-09-39 Dashboard DAKOTA ADMIN.png"
+  }
+}
+
+docs {
+  Mendapatkan URL sementara (valid 1 jam) untuk mengakses file di Private Bucket.
+  Input: file_name (didapat dari response upload)
+  Output: url (link akses aman)
+}

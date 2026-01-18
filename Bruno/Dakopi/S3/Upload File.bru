@@ -1,0 +1,21 @@
+meta {
+  name: Upload File (S3)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/api/s3/upload
+  body: multipartForm
+  auth: inherit
+}
+
+body:multipart-form {
+  file: @file()
+}
+
+docs {
+  Upload file ke S3 (RustFS).
+  Limit ukuran file: 10MB.
+  Auth: Wajib (Bearer Token).
+}

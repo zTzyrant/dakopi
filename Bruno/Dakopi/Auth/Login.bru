@@ -13,13 +13,22 @@ post {
 body:json {
   {
     "login_id": "superadmin",
-    "password": "superpassword123"
+    "password": "superpassword123",
+    "remember_me": false
   }
 }
 
 script:post-response {
   if(res.body.data.token){
     bru.setVar("token", res.body.data.token)
+  }
+  
+  if(res.body.data.refresh_token) {
+    bru.setVar("refresh_token", res.body.data.refresh_token)
+  }
+  
+  if(res.body.data.temp_token) {
+    bru.setVar("temp_token", res.body.data.temp_token)
   }
 }
 

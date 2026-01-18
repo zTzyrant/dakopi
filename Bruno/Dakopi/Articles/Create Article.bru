@@ -1,0 +1,38 @@
+meta {
+  name: Create Article (Markdown)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/api/articles
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "title": "Markdown Features Showcase",
+    "excerpt": "A comprehensive guide and test suite for all supported Markdown formatting.",
+    "content": "# Ultimate Markdown Rendering Test\n\nThis post serves as a comprehensive test suite...",
+    "status": "published",
+    "visibility": "public",
+    "tags": ["019baf86-acfc-7781-a865-ff6517f636c4"],
+    "featured_image": "https://images.unsplash.com/photo-1542831371-29b0f74f9713?q=80&w=2670&auto=format&fit=crop"
+  }
+}
+
+script:post-response {
+  const articlesData = res.body.data
+  if(articlesData){
+    if(articlesData.id && articlesData.slug){
+      bru.setVar("articles_uuid",articlesData.id)
+      bru.setVar("articles_uuid",articlesData.slug)
+    }
+  }
+}
+
+docs {
+  NOTE: 'tags' now expects an array of UUIDs (Public ID of the Tag).
+  Fetch valid UUIDs from /api/articles/tags first.
+}
