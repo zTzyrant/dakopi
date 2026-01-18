@@ -48,6 +48,8 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
 # Redis
 redis = { version = "0.27", features = ["tokio-comp", "tokio-rustls-comp"] }
 base64 = "0.22.1"
+aws-config = "1.8.12"
+aws-sdk-s3 = "1.120.0"
 
 [profile.dev]
 debug = 0

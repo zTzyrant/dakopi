@@ -9,7 +9,6 @@ use crate::entities::media;
 use crate::models::media_model::{MediaResponse, MediaListResponse};
 use crate::models::article_model::PaginationMeta;
 use crate::utils::nsfw_utils::{NsfwModel};
-use std::path::Path;
 
 pub struct MediaService;
 
@@ -17,7 +16,7 @@ impl MediaService {
     pub async fn upload_media(
         state: &AppState,
         uploader_id: i64, // Internal ID
-        file_name: String,
+        _file_name: String,
         file_data: Vec<u8>,
         content_type: String,
     ) -> Result<MediaResponse, (StatusCode, &'static str, String)> {
@@ -39,24 +38,19 @@ impl MediaService {
         let (webp_data, _width, _height) = Self::convert_to_webp(&file_data)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "MEDIA_CONVERSION_ERR", format!("Failed to process image: {}", e)))?;
 
-        // Fix Filename: Remove old extension, add .webp
-        let name_without_ext = Path::new(&file_name)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("image");
-        let new_filename = format!("{}.webp", name_without_ext);
+        // 4. Upload to S3 (RustFS)
+        let public_id = Uuid::now_v7();
+        let new_filename = format!("{}.webp", public_id); // Use UUID as filename for S3
 
-        // 4. Upload to ImageKit
-        let upload_result = state.imagekit_service.upload_file(webp_data.clone(), new_filename.clone()).await
+        let upload_url = state.s3_service.upload_file(webp_data.clone(), new_filename.clone(), "image/webp".to_string()).await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, "STORAGE_UPLOAD_ERR", format!("Upload failed: {}", e)))?;
 
         // 5. Save to Database
-        let public_id = Uuid::now_v7();
         let media_model = media::ActiveModel {
             id: NotSet, // Auto Increment
             public_id: Set(public_id),
-            name: Set(upload_result.name),
-            url: Set(upload_result.url.clone()),
+            name: Set(new_filename.clone()),
+            url: Set(upload_url.clone()),
             mime_type: Set("image/webp".to_string()),
             size: Set(webp_data.len() as i64),
             alt_text: Set(None),
@@ -69,7 +63,7 @@ impl MediaService {
 
         Ok(MediaResponse {
             id: saved.public_id,
-            url: upload_result.url,
+            url: upload_url,
             name: new_filename,
             mime_type: "image/webp".to_string(),
             size: webp_data.len() as i64,

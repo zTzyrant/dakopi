@@ -15,9 +15,11 @@ pub struct Config {
     pub smtp_from: String,
     pub brevo_api_key: String,
     pub reset_hash_key: String,
-    pub imagekit_private_key: String,
-    pub imagekit_public_key: String,
-    pub imagekit_url_endpoint: String,
+    pub s3_endpoint: String,
+    pub s3_access_key: String,
+    pub s3_secret_key: String,
+    pub s3_bucket_name: String,
+    pub s3_region: String,
     pub google_client_id: String,
     pub google_client_secret: String,
     pub google_redirect_url: String,
@@ -31,7 +33,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub redis_service: RedisService,
     pub email_service: crate::services::email_service::EmailService,
-    pub imagekit_service: crate::services::imagekit_service::ImageKitService,
+    pub s3_service: crate::services::s3_service::S3Service,
     pub enforcer: crate::auth::SharedEnforcer,
     pub rate_limiter: std::sync::Arc<crate::middleware::rate_limiter::RateLimiter>,
 }
@@ -68,9 +70,11 @@ impl Config {
         let brevo_api_key = env::var("BREVO_API_KEY").unwrap_or_default();
         let reset_hash_key = env::var("RESET_HASH_KEY").unwrap_or_else(|_| "default_secret".to_string());
 
-        let imagekit_private_key = env::var("IMAGEKIT_PRIVATE_KEY").expect("IMAGEKIT_PRIVATE_KEY must be set");
-        let imagekit_public_key = env::var("IMAGEKIT_PUBLIC_KEY").expect("IMAGEKIT_PUBLIC_KEY must be set");
-        let imagekit_url_endpoint = env::var("IMAGEKIT_URL_ENDPOINT").expect("IMAGEKIT_URL_ENDPOINT must be set");
+        let s3_endpoint = env::var("S3_ENDPOINT").expect("S3_ENDPOINT wajib diisi");
+        let s3_access_key = env::var("S3_ACCESS_KEY").expect("S3_ACCESS_KEY wajib diisi");
+        let s3_secret_key = env::var("S3_SECRET_KEY").expect("S3_SECRET_KEY wajib diisi");
+        let s3_bucket_name = env::var("S3_BUCKET_NAME").expect("S3_BUCKET_NAME wajib diisi");
+        let s3_region = env::var("S3_REGION").unwrap_or_else(|_| "auto".to_string());
 
         let google_client_id = env::var("GOOGLE_CLIENT_ID").unwrap_or_default();
         let google_client_secret = env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default();
@@ -92,9 +96,11 @@ impl Config {
             smtp_from,
             brevo_api_key,
             reset_hash_key,
-            imagekit_private_key,
-            imagekit_public_key,
-            imagekit_url_endpoint,
+            s3_endpoint,
+            s3_access_key,
+            s3_secret_key,
+            s3_bucket_name,
+            s3_region,
             google_client_id,
             google_client_secret,
             google_redirect_url,

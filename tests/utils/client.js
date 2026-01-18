@@ -68,6 +68,43 @@ class ApiClient {
     }
   }
 
+  async upload(endpoint, formData, token) {
+    const url = `${BASE_URL}${endpoint}`;
+    const headers = {}; // Let browser/fetch set Content-Type with boundary
+
+    const authToken = token !== undefined ? token : this.accessToken;
+    if (authToken) {
+      headers["Authorization"] = `Bearer ${authToken}`;
+    }
+
+    log(`[POST] UPLOAD ${endpoint}`, colors.cyan);
+    // Note: Logging FormData content is tricky/verbose, skipping detail log for body
+
+    try {
+      const options = {
+        method: "POST",
+        headers,
+        body: formData,
+      };
+
+      const res = await fetch(url, options);
+
+      let data;
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        data = await res.text();
+      }
+
+      logDetail(`RESPONSE: ${res.status} ${res.statusText}`, data);
+      return { status: res.status, data };
+    } catch (error) {
+      log(`❌ Connection Error: ${error.message}`, colors.red);
+      return { status: 0, data: null, error };
+    }
+  }
+
   // Assertion Helpers
   assert(condition, message) {
     if (condition) {
