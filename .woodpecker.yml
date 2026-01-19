@@ -1,6 +1,7 @@
 steps:
   deploy-production:
     image: docker:git
+    timeout: 3h
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
