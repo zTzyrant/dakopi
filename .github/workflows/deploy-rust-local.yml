@@ -1,0 +1,26 @@
+name: Build & Deploy Rust Local
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  local-build-deploy:
+    runs-on: [self-hosted, hera-eye]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with Low Memory Strategy
+        run: |
+          export CARGO_NET_GIT_FETCH_WITH_CLI=true
+          cargo build --release --jobs 1 --workspace
+
+      - name: Run Migration
+        run: |
+          chmod +x target/release/migration
+          ./target/release/migration
+
+      - name: Atomic Restart
+        run: |
+          cp target/release/dakopi /home/zein/projects/dakopi/dakopi
+          sudo systemctl restart dakopi
