@@ -1,26 +1,39 @@
-name: Build & Deploy Rust Local
+name: Deploy Dakopi Local Build
 
 on:
   push:
     branches: [master]
 
 jobs:
-  local-build-deploy:
+  build-and-deploy:
     runs-on: [self-hosted, hera-eye]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Build with Low Memory Strategy
+      - name: Create .env from Secrets
         run: |
-          export CARGO_NET_GIT_FETCH_WITH_CLI=true
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+          echo "PORT=3011" >> .env
+
+      - name: Build Rust (Low Memory Mode)
+        run: |
           cargo build --release --jobs 1 --workspace
 
-      - name: Run Migration
+      - name: Run Database Migration
         run: |
           chmod +x target/release/migration
           ./target/release/migration
 
-      - name: Atomic Restart
+      - name: Update Binary and Restart
         run: |
-          cp target/release/dakopi /home/zein/projects/dakopi/dakopi
+          mkdir -p src/auth
+          cp src/auth/rbac_model.conf /home/zein/projects/dakopi/src/auth/rbac_model.conf
+
+          cp target/release/dakopi /home/zein/projects/dakopi/dakopi_new
+          chmod +x /home/zein/projects/dakopi/dakopi_new
+
+          mv /home/zein/projects/dakopi/dakopi_new /home/zein/projects/dakopi/dakopi
+
           sudo systemctl restart dakopi
