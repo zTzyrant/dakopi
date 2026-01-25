@@ -2,7 +2,7 @@ name: Build & Deploy Rust Local
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
   local-build-deploy:
